@@ -1,164 +1,110 @@
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const dotenv = require('dotenv');
-const OpenAI = require('openai');
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const dotenv = require("dotenv");
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: __dirname + '/.env' });
+
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Debug log
+if (process.env.GROQ_API_KEY) {
+  console.log("✅ Groq API key loaded.");
+} else {
+  console.warn("⚠️  Groq API key missing! The /generate-email route will not work.");
+}
+
 
 // Configure multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
+
+
 
 // Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(cors({
+  origin: ["http://localhost:5173", "http://localhost:5176"], // frontend ports
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"],
+}));
 
-// Health check route
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', message: 'ColdConnect backend is running' });
+
+
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "OK", message: "ColdConnect backend is running" });
 });
 
-// Generate email route
-app.post('/generate-email', async (req, res) => {
+app.post("/generate-email", async (req, res) => {
   try {
     const { role, company, location, tone, comments } = req.body;
 
-    // Validate required fields
     if (!role || !company || !location || !tone) {
-      return res.status(400).json({
-        error: 'Missing required fields: role, company, location, tone are required'
-      });
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Create the prompt for OpenAI
-    const prompt = `Write a professional cold email for a ${role} position at ${company} in ${location}, with a ${tone.toLowerCase()} tone. ${comments ? `Extra notes: ${comments}.` : ''} 
+    const prompt = `Write a professional cold email for a ${role} position at ${company} in ${location}, with a ${tone.toLowerCase()} tone. ${comments ? `Extra notes: ${comments}` : ""
+      }`;
 
-Please provide:
-1. A compelling subject line
-2. A professional email body that:
-   - Introduces the candidate professionally
-   - Shows knowledge of the company
-   - Highlights relevant experience
-   - Includes a clear call-to-action
-   - Maintains the requested tone
+    // Initialize Groq
+    const Groq = require("groq-sdk");
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-Format your response as JSON with "subject" and "body" fields.`;
-
-    // Call OpenAI API
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+    // Call Groq API
+    const completion = await groq.chat.completions.create({
+      model: "mixtral-8x7b-32768", // or "llama3-70b-8192"
       messages: [
         {
           role: "system",
-          content: "You are a professional email writing assistant. Always respond with valid JSON containing 'subject' and 'body' fields."
+          content:
+            "You are a professional email writing assistant. Always respond with valid JSON containing 'subject' and 'body' fields.",
         },
-        {
-          role: "user",
-          content: prompt
-        }
+        { role: "user", content: prompt },
       ],
       temperature: 0.7,
       max_tokens: 1000,
     });
 
     const response = completion.choices[0].message.content;
-    
-    // Try to parse the JSON response
-    let emailData;
+
+    // Try parsing JSON, fallback to text if needed
+    let data;
     try {
-      emailData = JSON.parse(response);
-    } catch (parseError) {
-      // If JSON parsing fails, create a structured response
-      const lines = response.split('\n');
-      const subject = lines.find(line => line.toLowerCase().includes('subject')) || 'Professional Inquiry';
-      const body = response.replace(subject, '').trim();
-      
-      emailData = {
-        subject: subject.replace(/subject:?/i, '').trim(),
-        body: body
+      data = JSON.parse(response);
+    } catch {
+      data = {
+        subject: "Professional Inquiry",
+        body: response,
       };
     }
 
+    res.json(data);
+
+  } catch (err) {
+    console.error("❌ Groq API error, using fallback:", err);
+
+    // Professional fallback email
     res.json({
-      subject: emailData.subject || 'Professional Inquiry',
-      body: emailData.body || response
-    });
+      subject: "Application for Open Position",
+      body: `Dear Hiring Manager,
 
-  } catch (error) {
-    console.error('Error generating email:', error);
-    
-    if (error.code === 'insufficient_quota') {
-      return res.status(402).json({
-        error: 'OpenAI API quota exceeded. Please check your API key and billing.'
-      });
-    }
-    
-    if (error.code === 'invalid_api_key') {
-      return res.status(401).json({
-        error: 'Invalid OpenAI API key. Please check your .env file.'
-      });
-    }
+I am writing to express my interest in the advertised role at your company. With relevant skills and experience, I am confident in my ability to contribute effectively.
 
-    res.status(500).json({
-      error: 'Failed to generate email. Please try again.'
+I would be delighted to discuss how my background aligns with your team's needs. Please let me know a convenient time for us to connect.
+
+Best regards,
+[Your Name]`,
     });
   }
 });
 
-// File upload route (for future resume/project uploads)
-app.post('/upload', upload.array('files', 5), (req, res) => {
-  try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: 'No files uploaded' });
-    }
-
-    const fileInfo = req.files.map(file => ({
-      name: file.originalname,
-      size: file.size,
-      type: file.mimetype
-    }));
-
-    res.json({
-      message: 'Files uploaded successfully',
-      files: fileInfo
-    });
-  } catch (error) {
-    console.error('Error uploading files:', error);
-    res.status(500).json({ error: 'Failed to upload files' });
-  }
-});
-
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
 
 // Start server
 app.listen(port, () => {
-  console.log(`🚀 ColdConnect backend running on port ${port}`);
-  console.log(`📧 Email generation endpoint: http://localhost:${port}/generate-email`);
-  console.log(`📁 File upload endpoint: http://localhost:${port}/upload`);
+  console.log(`🚀 ColdConnect backend running at http://localhost:${port}`);
 });
-
-module.exports = app;
