@@ -2,6 +2,7 @@ console.log("🔥 THIS IS THE BACKEND SERVER.JS THAT IS RUNNING");
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
+import multer from "multer";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
 
@@ -15,6 +16,23 @@ app.use(cors({
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type"],
 }));
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept PDF and DOCX files
+    if (file.mimetype === 'application/pdf' || 
+        file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF and DOCX files are allowed'), false);
+    }
+  }
+});
 
 app.use(bodyParser.json());
 
@@ -32,8 +50,9 @@ app.get("/api/ping", (req, res) => {
 });
 
 // ✅ main generate email route
-app.post("/api/generate-email", async (req, res) => {
+app.post("/api/generate-email", upload.single('resume'), async (req, res) => {
   console.log("📧 Generate email request received:", req.body);
+  console.log("📎 Resume file:", req.file ? `${req.file.originalname} (${req.file.size} bytes)` : 'No file uploaded');
   
   const { domain, company, location, tone, comments } = req.body;
 
@@ -52,16 +71,21 @@ app.post("/api/generate-email", async (req, res) => {
     const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
     // Create a compelling prompt for cold email generation
-    const prompt = `Write a professional cold email for a ${domain} position at ${company} in ${location}. 
+    let prompt = `Write a professional cold email for a ${domain} position at ${company} in ${location}. 
 
 Requirements:
 - Tone: ${tone.toLowerCase()}
 - Company: ${company}
 - Location: ${location}
 - Role: ${domain}
-${comments ? `- Additional context: ${comments}` : ''}
+${comments ? `- Additional context: ${comments}` : ''}`;
 
-The email should:
+    // Add resume context if file was uploaded
+    if (req.file) {
+      prompt += `\n\n- The user's resume is attached, use it to write a more personalized email if relevant.`;
+    }
+
+    prompt += `\n\nThe email should:
 1. Have a compelling subject line that stands out
 2. Show genuine interest in the company and role
 3. Highlight relevant experience and skills
