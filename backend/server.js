@@ -33,98 +33,92 @@ app.get("/api/ping", (req, res) => {
 
 // ✅ main generate email route
 app.post("/api/generate-email", async (req, res) => {
+  console.log("📧 Generate email request received:", req.body);
+  
+  const { domain, company, location, tone, comments } = req.body;
+
+  // Validate required fields
+  if (!domain || !company || !location || !tone) {
+    console.log("❌ Missing required fields");
+    return res.status(400).json({ 
+      error: "Missing required fields: domain, company, location, tone are required" 
+    });
+  }
+
   try {
-    console.log("📧 Generate email request received:", req.body);
-    
-    const { domain, company, location, tone, comments } = req.body;
-
-    // Validate required fields
-    if (!domain || !company || !location || !tone) {
-      console.log("❌ Missing required fields");
-      return res.status(400).json({ 
-        error: "Missing required fields: domain, company, location, tone are required" 
-      });
-    }
-
-    // Check if API key is configured
-    if (!process.env.GROQ_API_KEY) {
-      console.log("❌ No Groq API key configured, using fallback");
-      return res.json({
-        subject: `Application for ${domain} Position at ${company}`,
-        body: `Dear Hiring Manager,
-
-I am writing to express my interest in the ${domain} position at ${company} in ${location}. With relevant skills and experience, I am confident in my ability to contribute effectively.
-
-I would be delighted to discuss how my background aligns with your team's needs. Please let me know a convenient time for us to connect.
-
-Best regards,
-[Your Name]`,
-      });
-    }
-
     console.log("🤖 Calling Groq API...");
-
-    // Initialize Groq client inside the route
+    
+    // Initialize Groq client
     const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-    // Groq API call
+    // Create a compelling prompt for cold email generation
+    const prompt = `Write a professional cold email for a ${domain} position at ${company} in ${location}. 
+
+Requirements:
+- Tone: ${tone.toLowerCase()}
+- Company: ${company}
+- Location: ${location}
+- Role: ${domain}
+${comments ? `- Additional context: ${comments}` : ''}
+
+The email should:
+1. Have a compelling subject line that stands out
+2. Show genuine interest in the company and role
+3. Highlight relevant experience and skills
+4. Be personalized and not generic
+5. Include a clear call-to-action
+6. Be professional but engaging
+7. Keep it concise (under 200 words)
+
+Format your response as JSON with "subject" and "body" fields.`;
+
+    // Call Groq API
     const completion = await client.chat.completions.create({
       model: "mixtral-8x7b-32768",
       messages: [
         { 
           role: "system", 
-          content: "You are an AI that writes professional cold emails. Always respond with valid JSON containing 'subject' and 'body' fields." 
+          content: "You are an expert cold email writer. Create compelling, personalized emails that get responses. Always respond with valid JSON containing 'subject' and 'body' fields." 
         },
-        {
-          role: "user",
-          content: `Write a professional cold email for a ${domain} position at ${company} in ${location}, with a ${tone.toLowerCase()} tone. ${comments ? `Extra notes: ${comments}` : ""}
-
-Please provide:
-1. A compelling subject line
-2. A professional email body that:
-   - Introduces the candidate professionally
-   - Shows knowledge of the company
-   - Highlights relevant experience
-   - Includes a clear call-to-action
-   - Maintains the requested tone
-
-Format your response as JSON with "subject" and "body" fields.`,
-        },
+        { role: "user", content: prompt }
       ],
-      temperature: 0.7,
-      max_tokens: 1000,
+      temperature: 0.8,
+      max_tokens: 800,
     });
 
     const response = completion.choices[0].message.content;
     console.log("🤖 Groq response:", response);
 
-    // Try to parse JSON response
+    // Parse JSON response
     let emailData;
     try {
       emailData = JSON.parse(response);
     } catch (parseError) {
       console.log("⚠️ JSON parse failed, using fallback structure");
       emailData = {
-        subject: `Application for ${domain} Position at ${company}`,
+        subject: `Exciting ${domain} Opportunity at ${company}`,
         body: response,
       };
     }
 
-    console.log("✅ Email generated successfully");
+    console.log("✅ AI email generated successfully");
     res.json(emailData);
     
   } catch (err) {
-    console.error("❌ Error in /api/generate-email:", err);
+    console.error("❌ Groq API error:", err.message);
     
-    // Professional fallback email
-    const { domain, company, location } = req.body || {};
+    // Fallback to a more professional template
     res.json({
-      subject: `Application for ${domain || 'Open'} Position at ${company || 'Your Company'}`,
-      body: `Dear Hiring Manager,
+      subject: `Exciting ${domain} Opportunity at ${company}`,
+      body: `Dear ${company} Team,
 
-I am writing to express my interest in the advertised role at your company. With relevant skills and experience, I am confident in my ability to contribute effectively.
+I hope this email finds you well. I'm reaching out to express my strong interest in the ${domain} position at ${company} in ${location}.
 
-I would be delighted to discuss how my background aligns with your team's needs. Please let me know a convenient time for us to connect.
+With my background in ${domain.toLowerCase()}, I'm excited about the opportunity to contribute to ${company}'s innovative work. ${comments ? `Specifically, ${comments.toLowerCase()}` : 'I bring relevant experience and a passion for delivering high-quality solutions.'}
+
+I would love the opportunity to discuss how my skills and enthusiasm can add value to your team. Would you be available for a brief conversation this week?
+
+Thank you for your time and consideration.
 
 Best regards,
 [Your Name]`,
@@ -140,12 +134,6 @@ app.get("/health", (req, res) => {
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
-});
-
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
-  res.status(500).json({ error: 'Internal server error' });
 });
 
 // ✅ start server
