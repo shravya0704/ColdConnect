@@ -1,168 +1,139 @@
-console.log("🔥 THIS IS THE BACKEND SERVER.JS THAT IS RUNNING");
 import express from "express";
 import cors from "cors";
-import bodyParser from "body-parser";
 import multer from "multer";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env safely
+dotenv.config({ path: path.join(__dirname, ".env") });
+console.log("[DEBUG] GROQ_API_KEY from .env:", process.env.GROQ_API_KEY ? "✅ Loaded" : "❌ Missing");
 
 const app = express();
+const port = process.env.PORT || 5000;
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// CORS configuration
-app.use(cors({
-  origin: ["http://localhost:5173", "http://localhost:5176"],
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"],
-}));
+const upload = multer({ storage: multer.memoryStorage() });
 
-// Configure multer for file uploads
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    // Accept PDF and DOCX files
-    if (file.mimetype === 'application/pdf' || 
-        file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PDF and DOCX files are allowed'), false);
+app.use(
+  cors({
+    origin: ["http://localhost:5173", "http://localhost:5176", "http://localhost:5178"],
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
+app.use(express.json());
+
+// Resume parsing helper (safe)
+async function extractResumeText(file) {
+  try {
+    if (!file) {
+      console.log("[DEBUG] No resume uploaded.");
+      return "";
     }
+
+    console.log("[DEBUG] Resume file type:", file.mimetype);
+
+    if (file.mimetype === "application/pdf") {
+      // Lazy-load pdf-parse only when needed
+      const { default: pdfParse } = await import("pdf-parse");
+      const data = await pdfParse(file.buffer);
+      return data.text.slice(0, 1500);
+    }
+
+    if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      const { default: mammoth } = await import("mammoth");
+      const result = await mammoth.extractRawText({ buffer: file.buffer });
+      return result.value.slice(0, 1500);
+    }
+
+    console.warn("[WARN] Unsupported file type for resume:", file.mimetype);
+    return "";
+  } catch (err) {
+    console.error("[Resume Parsing Error]", err);
+    return "";
   }
-});
-
-app.use(bodyParser.json());
-
-// Debug log for API key
-if (process.env.GROQ_API_KEY) {
-  console.log("✅ Groq API key loaded");
-} else {
-  console.warn("⚠️ Groq API key missing! Using fallback responses.");
 }
 
-// ✅ test route
-app.get("/api/ping", (req, res) => {
-  console.log("✅ Ping route hit");
-  res.json({ message: "pong" });
-});
 
-// ✅ main generate email route
-app.post("/api/generate-email", upload.single('resume'), async (req, res) => {
-  console.log("📧 Generate email request received:", req.body);
-  console.log("📎 Resume file:", req.file ? `${req.file.originalname} (${req.file.size} bytes)` : 'No file uploaded');
-  
-  const { domain, company, location, tone, comments } = req.body;
-
-  // Validate required fields
-  if (!domain || !company || !location || !tone) {
-    console.log("❌ Missing required fields");
-    return res.status(400).json({ 
-      error: "Missing required fields: domain, company, location, tone are required" 
-    });
-  }
-
+app.post("/generate-email", upload.single("resume"), async (req, res) => {
   try {
-    console.log("🤖 Calling Groq API...");
-    
-    // Initialize Groq client
-    const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const { role, company, location, tone, comments } = req.body;
+    console.log("[DEBUG] Received data:", { role, company, location, tone, comments });
 
-    // Create a compelling prompt for cold email generation
-    let prompt = `Write a professional cold email for a ${domain} position at ${company} in ${location}. 
-
-Requirements:
-- Tone: ${tone.toLowerCase()}
-- Company: ${company}
-- Location: ${location}
-- Role: ${domain}
-${comments ? `- Additional context: ${comments}` : ''}`;
-
-    // Add resume context if file was uploaded
-    if (req.file) {
-      prompt += `\n\n- The user's resume is attached, use it to write a more personalized email if relevant.`;
+    if (!role || !company || !location || !tone) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    prompt += `\n\nThe email should:
-1. Have a compelling subject line that stands out
-2. Show genuine interest in the company and role
-3. Highlight relevant experience and skills
-4. Be personalized and not generic
-5. Include a clear call-to-action
-6. Be professional but engaging
-7. Keep it concise (under 200 words)
+    // Extract resume text safely
+    const resumeText = await extractResumeText(req.file);
+    console.log("[DEBUG] Resume text extracted length:", resumeText.length);
 
-Format your response as JSON with "subject" and "body" fields.`;
+    // Build email prompt
+    const prompt = `Write a professional cold email for a ${role} position at ${company} in ${location}, with a ${tone.toLowerCase()} tone.
+    ${comments ? `Extra notes: ${comments}` : ""}
+    ${resumeText ? `Here is a summary of the user's resume: ${resumeText}` : ""}
+    Return only the email body, no explanations.`;
 
-    // Call Groq API
-    const completion = await client.chat.completions.create({
-      model: "mixtral-8x7b-32768",
-      messages: [
-        { 
-          role: "system", 
-          content: "You are an expert cold email writer. Create compelling, personalized emails that get responses. Always respond with valid JSON containing 'subject' and 'body' fields." 
-        },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.8,
-      max_tokens: 800,
-    });
+    console.log("[Groq] Email Prompt:", prompt.slice(0, 200) + "...");
 
-    const response = completion.choices[0].message.content;
-    console.log("🤖 Groq response:", response);
-
-    // Parse JSON response
-    let emailData;
+    let aiEmail = "";
     try {
-      emailData = JSON.parse(response);
-    } catch (parseError) {
-      console.log("⚠️ JSON parse failed, using fallback structure");
-      emailData = {
-        subject: `Exciting ${domain} Opportunity at ${company}`,
-        body: response,
-      };
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 400,
+      });
+      aiEmail = completion.choices[0]?.message?.content || "";
+    } catch (apiError) {
+      console.error("[Groq API Error]", apiError);
+      return res.status(502).json({ error: "Failed to generate email from Groq API" });
     }
 
-    console.log("✅ AI email generated successfully");
-    res.json(emailData);
-    
-  } catch (err) {
-    console.error("❌ Groq API error:", err.message);
-    
-    // Fallback to a more professional template
+    // Generate contact suggestion
+    let suggestion = "Unknown";
+    try {
+      const suggestionPrompt = `Given this context, suggest the best person/job title to email. Examples: Hiring Manager, Recruiter. Respond with only the title.
+      
+      Role: ${role}
+      Company: ${company}
+      Location: ${location}
+      Tone: ${tone}
+      Extra Comments: ${comments}
+      ${resumeText ? `Resume Summary: ${resumeText}` : ""}`;
+
+      console.log("[Groq] Suggestion Prompt:", suggestionPrompt.slice(0, 200) + "...");
+
+      const suggestionRes = await groq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [{ role: "user", content: suggestionPrompt }],
+        temperature: 0.3,
+        max_tokens: 50,
+      });
+
+      suggestion = suggestionRes.choices[0]?.message?.content?.trim() || "Unknown";
+    } catch (err) {
+      console.error("[Groq Suggestion Error]", err);
+    }
+
     res.json({
-      subject: `Exciting ${domain} Opportunity at ${company}`,
-      body: `Dear ${company} Team,
-
-I hope this email finds you well. I'm reaching out to express my strong interest in the ${domain} position at ${company} in ${location}.
-
-With my background in ${domain.toLowerCase()}, I'm excited about the opportunity to contribute to ${company}'s innovative work. ${comments ? `Specifically, ${comments.toLowerCase()}` : 'I bring relevant experience and a passion for delivering high-quality solutions.'}
-
-I would love the opportunity to discuss how my skills and enthusiasm can add value to your team. Would you be available for a brief conversation this week?
-
-Thank you for your time and consideration.
-
-Best regards,
-[Your Name]`,
+      email: aiEmail,
+      subject: `Application for ${role} at ${company}`,
+      suggestion,
     });
+  } catch (err) {
+    console.error("Error in /generate-email:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// Health check route
-app.get("/health", (req, res) => {
-  res.json({ status: "OK", message: "ColdConnect backend is running" });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
-
-// ✅ start server
-app.listen(5000, () => {
-  console.log("🚀 Server running on http://localhost:5000");
-  console.log("📧 Email generation endpoint: http://localhost:5000/api/generate-email");
-  console.log("🏥 Health check: http://localhost:5000/health");
+app.listen(port, () => {
+  console.log(`✅ Backend running on http://localhost:${port}`);
 });
