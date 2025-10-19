@@ -1,0 +1,15 @@
+John Doe
+Software Engineer
+Email: john@example.com
+
+EXPERIENCE:
+• Built e-commerce platform that increased conversion by 25%
+• Led team of 6 developers on React.js mobile application
+• Implemented CI/CD pipeline reducing deployment time by 50%
+• Developed REST APIs handling 10M+ requests daily
+
+SKILLS:
+JavaScript, Python, React, Node.js, AWS, Docker, PostgreSQL
+
+EDUCATION:
+BS Computer Science, University of Technology (2020)
