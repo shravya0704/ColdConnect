@@ -5,7 +5,28 @@ import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import path from "path";
 import { fileURLToPath } from "url";
-import { enrichWithHunter } from './lib/hunterClient.js';
+import { findEmailsWithHybrid } from './lib/hybridEmailFinder.js';
+
+// 🧩 FIX EMAIL FINDER MAP ERROR
+// This ensures we never call .map() on undefined when using findEmailsWithHybrid()
+const safeFindEmailsWithHybrid = async (...args) => {
+  try {
+    const result = await findEmailsWithHybrid(...args);
+    if (!result || typeof result !== 'object') {
+      console.warn('[Email Finder] Expected object, got:', typeof result);
+      return { success: false, data: { contacts: [] }, count: 0, sources: [], cached: false };
+    }
+    // Ensure data.contacts is always an array
+    if (!Array.isArray(result.data?.contacts)) {
+      console.warn('[Email Finder] Expected array for data.contacts, got:', typeof result.data?.contacts);
+      return { ...result, data: { contacts: [] }, count: 0 };
+    }
+    return result;
+  } catch (error) {
+    console.error('[Email Finder] Safe wrapper caught error:', error);
+    return { success: false, data: { contacts: [] }, count: 0, sources: [], cached: false };
+  }
+};
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,7 +35,8 @@ const __dirname = path.dirname(__filename);
 // Load .env safely
 dotenv.config({ path: path.join(__dirname, ".env") });
 console.log("[DEBUG] GROQ_API_KEY from .env:", process.env.GROQ_API_KEY ? "✅ Loaded" : "❌ Missing");
-console.log("[DEBUG] HUNTER_API_KEY from .env:", process.env.HUNTER_API_KEY ? "✅ Loaded" : "❌ Missing");
+console.log("[DEBUG] GNEWS_API_KEY from .env:", process.env.GNEWS_API_KEY ? "✅ Loaded" : "❌ Missing");
+console.log("[DEBUG] ABSTRACT_API_KEY from .env:", process.env.ABSTRACT_API_KEY ? "✅ Loaded" : "❌ Missing");
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -136,50 +158,190 @@ function parseGeneratedSubject(content = "") {
   return { subject: null, body: content };
 }
 
-// Resume parsing helper (buffer-only; returns up to 4000 chars)
+// Resume parsing helper (improved with better text cleaning and extraction)
 async function extractResumeText(file) {
+  console.log("\n📋 === RESUME PARSING DEBUG ===");
+  console.log("File received:", !!file);
+  
   try {
     if (!file || !file.buffer) {
-      console.log("[DEBUG] No resume uploaded or missing buffer.");
-      return "";
+      console.log("❌ No valid resume file provided");
+      return "No resume provided.";
     }
 
     const mime = file.mimetype || "";
-    console.log("[DEBUG] Resume file type:", mime);
+    const filename = file.originalname || "";
+    console.log("🔍 File details:", {
+      filename,
+      mimetype: mime,
+      size: file.size,
+      bufferLength: file.buffer?.length
+    });
 
     let extracted = "";
 
+    // Handle PDF files
     if (mime === "application/pdf") {
-      // Import pdf-parse correctly for ES modules
-      const pdfParse = await import("pdf-parse");
-      const parser = pdfParse.default || pdfParse;
-      const data = await parser(file.buffer);
-      extracted = data.text || "";
+      console.log("📄 Processing PDF file...");
+      try {
+        const pdfParse = await import("pdf-parse");
+        const parser = pdfParse.default || pdfParse;
+        
+        if (!Buffer.isBuffer(file.buffer)) {
+          throw new Error("Invalid PDF buffer format");
+        }
+        
+        console.log("📖 Parsing PDF with pdf-parse...");
+        const data = await parser(file.buffer);
+        
+        if (!data) {
+          console.warn("⚠️ PDF parser returned no data");
+          return "Error parsing PDF resume - no data available.";
+        }
+        
+        extracted = data.text || "";
+        
+        if (!extracted || extracted.trim().length === 0) {
+          console.warn("⚠️ PDF parsed but no text extracted");
+          return "No readable text found in resume. PDF may be image-based or corrupted.";
+        }
+        
+        console.log(`✅ PDF extracted: ${extracted.length} characters`);
+        
+      } catch (pdfError) {
+        console.error("❌ PDF parsing failed:", pdfError.message);
+        console.error("📋 Error details:", {
+          name: pdfError.name,
+          code: pdfError.code,
+          stack: pdfError.stack?.split('\n')[0]
+        });
+        
+        // More specific error messages
+        if (pdfError.message.includes('Invalid PDF structure')) {
+          return "Error parsing PDF resume - invalid PDF format. Please ensure the file is a valid PDF.";
+        } else if (pdfError.message.includes('ENOENT')) {
+          return "Error parsing PDF resume - file not accessible. Please try uploading again.";
+        } else {
+          return "Error parsing PDF resume. Please try uploading a different PDF file.";
+        }
+      }
     }
 
+    // Handle DOCX files
     else if (
       mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      (file.originalname && file.originalname.toLowerCase().endsWith(".docx"))
+      filename.toLowerCase().endsWith(".docx")
     ) {
-      // Parse DOCX from in-memory buffer
-      const mammoth = await import("mammoth");
-      const mammothParser = mammoth.default || mammoth;
-      const result = await mammothParser.extractRawText({ buffer: file.buffer });
-      extracted = (result?.value || "");
-    } else {
-      // DOC (.doc) not supported by mammoth; avoid any path-based parsing
-      console.warn("[WARN] Unsupported resume file type:", mime, "(only PDF and DOCX are supported)");
-      return "";
+      console.log("📄 Processing DOCX file...");
+      try {
+        const mammoth = await import("mammoth");
+        const mammothParser = mammoth.default || mammoth;
+        const result = await mammothParser.extractRawText({ buffer: file.buffer });
+        extracted = (result?.value || "");
+        
+        if (!extracted || extracted.trim().length === 0) {
+          console.warn("⚠️ DOCX parsed but no text extracted");
+          return "No readable text found in resume.";
+        }
+        
+        console.log(`✅ DOCX extracted: ${extracted.length} characters`);
+        
+      } catch (docxError) {
+        console.error("❌ DOCX parsing failed:", docxError.message);
+        return "Error parsing DOCX resume.";
+      }
     }
 
-    // Normalize and cap length
-    const text = String(extracted).replace(/\u0000/g, "").trim();
-    const clipped = text.slice(0, 4000);
-    console.log("[DEBUG] Resume text extracted length:", clipped.length);
-    return clipped;
+    // Handle TEXT files (txt, plain text)
+    else if (
+      mime === "text/plain" || 
+      filename.toLowerCase().endsWith(".txt") ||
+      filename.toLowerCase().endsWith(".text")
+    ) {
+      console.log("📄 Processing TEXT file...");
+      try {
+        extracted = file.buffer.toString('utf-8');
+        
+        if (!extracted || extracted.trim().length === 0) {
+          console.warn("⚠️ Text file is empty");
+          return "No readable text found in resume.";
+        }
+        
+        console.log(`✅ TEXT extracted: ${extracted.length} characters`);
+        
+      } catch (textError) {
+        console.error("❌ Text parsing failed:", textError.message);
+        return "Error parsing text resume.";
+      }
+    }
+
+    // Handle DOC files (legacy Word format)
+    else if (
+      mime === "application/msword" || 
+      filename.toLowerCase().endsWith(".doc")
+    ) {
+      console.log("📄 Processing DOC file...");
+      try {
+        const mammoth = await import("mammoth");
+        const mammothParser = mammoth.default || mammoth;
+        const result = await mammothParser.extractRawText({ buffer: file.buffer });
+        extracted = (result?.value || "");
+        
+        if (!extracted || extracted.trim().length === 0) {
+          console.warn("⚠️ DOC parsed but no text extracted");
+          return "No readable text found in resume.";
+        }
+        
+        console.log(`✅ DOC extracted: ${extracted.length} characters`);
+        
+      } catch (docError) {
+        console.error("❌ DOC parsing failed:", docError.message);
+        return "Error parsing DOC resume.";
+      }
+    }
+
+    // Unsupported file type
+    else {
+      console.warn("❌ Unsupported file type:", mime, "for file:", filename);
+      return `Unsupported file type: ${mime}. Please upload PDF, DOCX, DOC, or TXT.`;
+    }
+
+    // Clean and process the text
+    console.log("🧹 Cleaning extracted text...");
+    const cleaned = extracted
+      .replace(/\s+/g, " ")
+      .replace(/•/g, "-")
+      .replace(/\u0000/g, "")
+      .replace(/\r\n/g, " ")
+      .replace(/\n/g, " ")
+      .trim();
+
+    console.log(`📊 Cleaned text: ${cleaned.length} characters`);
+
+    // Extract meaningful bullet points for resume highlights
+    console.log("🎯 Extracting key highlights...");
+    const bulletPoints = cleaned
+      .split(/[.\n!?]/)
+      .map(line => line.trim())
+      .filter(line => {
+        return line.length > 30 && line.length < 200 && !line.includes("@");
+      })
+      .slice(0, 8);
+
+    console.log(`📋 Found ${bulletPoints.length} key highlights`);
+    
+    const result = bulletPoints.length > 0 ? bulletPoints.join(". ") : cleaned.slice(0, 1000);
+    
+    console.log(`✅ Final processed text: ${result.length} characters`);
+    console.log("📝 Preview:", result.substring(0, 200) + "...");
+    console.log("=== END RESUME PARSING DEBUG ===\n");
+    
+    return result;
+    
   } catch (err) {
-    console.error("[Resume Parsing Error]", err && (err.stack || err.message || err));
-    return "";
+    console.error("💥 Unexpected error in resume parsing:", err.message);
+    console.error("Stack:", err.stack);
+    return "Error parsing resume.";
   }
 }
 
@@ -242,29 +404,68 @@ async function extractHardSkills(text) {
 async function fetchCompanyNews(company) {
   try {
     const apiKey = process.env.GNEWS_API_KEY;
-    if (!apiKey || !company) return null;
+    if (!apiKey) {
+      console.warn("[Company News] GNEWS_API_KEY not configured");
+      return null;
+    }
+    
+    if (!company) {
+      console.warn("[Company News] No company name provided");
+      return null;
+    }
 
     const q = encodeURIComponent(company);
     const url = `https://gnews.io/api/v4/search?q=${q}&lang=en&max=3&token=${apiKey}`;
+    console.log(`[Company News] Fetching news for: ${company}`);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 8000); // Increased timeout
 
     const resp = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
 
-    if (!resp.ok) return null;
+    console.log(`[Company News] API response status: ${resp.status}`);
+
+    if (!resp.ok) {
+      if (resp.status === 401) {
+        console.error("[Company News] Invalid API key");
+      } else if (resp.status === 429) {
+        console.error("[Company News] Rate limit exceeded");
+      } else if (resp.status === 403) {
+        console.error("[Company News] API access forbidden - check subscription");
+      } else {
+        console.error(`[Company News] API error: ${resp.status} ${resp.statusText}`);
+      }
+      return null;
+    }
+
     const data = await resp.json();
+    console.log(`[Company News] Found ${data?.articles?.length || 0} articles`);
+
+    if (data.error) {
+      console.error("[Company News] API returned error:", data.error);
+      return null;
+    }
 
     const topArticle = data?.articles?.[0];
-    if (!topArticle) return null;
+    if (!topArticle) {
+      console.log("[Company News] No articles found for company");
+      return null;
+    }
 
     const title = topArticle.title || "";
     const source = topArticle.source?.name || "";
-    return title ? `Recent: ${title}${source ? ` — ${source}` : ''}` : null;
+    const result = title ? `Recent: ${title}${source ? ` — ${source}` : ''}` : null;
+    
+    console.log(`[Company News] Successfully retrieved: ${result ? 'Yes' : 'No'}`);
+    return result;
 
   } catch (err) {
-    console.warn("[Company News] Skipping due to error:", err.message);
+    if (err.name === 'AbortError') {
+      console.warn("[Company News] Request timeout after 8 seconds");
+    } else {
+      console.warn("[Company News] Error:", err.message);
+    }
     return null;
   }
 }
@@ -285,80 +486,173 @@ function parseJsonFromModel(content = "") {
   return null;
 }
 
-// Hunter.io email finding helper (simplified and robust)
-// The old findEmailsWithHunter and parseLocationInfo functions have been replaced with the new Hunter client
-
-// Simple Hunter.io email search using the new client
-async function findEmailsWithHunter(company, location = '') {
-  try {
-    if (!process.env.HUNTER_API_KEY || process.env.HUNTER_API_KEY === "your_hunter_io_api_key_here") {
-      console.log("[DEBUG] Hunter.io API key not configured, skipping email search");
-      return [];
-    }
-
-    // Extract domain from company name
-    let domain = company.toLowerCase();
-
-    if (!domain.includes('.com') && !domain.includes('.org') && !domain.includes('.net') && !domain.includes('.io')) {
-      const commonDomains = {
-        'google': 'google.com',
-        'microsoft': 'microsoft.com',
-        'apple': 'apple.com',
-        'amazon': 'amazon.com',
-        'meta': 'meta.com',
-        'facebook': 'meta.com',
-        'netflix': 'netflix.com',
-        'tesla': 'tesla.com',
-        'uber': 'uber.com',
-        'airbnb': 'airbnb.com'
-      };
-      domain = commonDomains[domain] || `${domain}.com`;
-    }
-
-    console.log("[Hunter.io] Searching emails for domain:", domain);
-
-    // Use the new Hunter client with caching
-    const hunterResult = await enrichWithHunter({
-      company: company,
-      domain: domain,
-      role: "recruiter", // Look for hiring-related contacts
-      firstName: "",
-      lastName: ""
-    });
-
-    if (hunterResult && hunterResult.domainSearchResults) {
-      // Extract emails from domain search results
-      const emails = hunterResult.domainSearchResults
-        .filter(email => email.confidence > 50)
-        .slice(0, 5)
-        .map(email => ({
-          email: email.value,
-          firstName: email.first_name,
-          lastName: email.last_name,
-          position: email.position,
-          confidence: email.confidence,
-          department: email.department,
-          matchType: 'hunter'
-        }));
-
-      console.log("[Hunter.io] Found", emails.length, "high-confidence emails");
-      return emails;
-    } else {
-      console.log("[Hunter.io] No emails found or quota reached");
-      return [];
-    }
-  } catch (err) {
-    console.error("[Hunter.io Error]", err);
-    return [];
-  }
-}
-
 // Email generation system prompt
 const emailSystemPrompt = `You are an expert at writing personalized, professional cold outreach emails. You generate concise, engaging emails that sound human and authentic. You always return valid JSON with the exact structure requested.`;
 
 // Simple health check
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
+});
+
+// POST route to find decision makers (unified with email finder)
+app.post('/find-decision-makers', async (req, res) => {
+  // Extract and validate fields from req.body
+  const { company, location, role, seniority, maxResults } = req.body;
+  
+  // Validation
+  if (!company || company.trim() === '') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Company name is required' 
+    });
+  }
+  
+  // Set defaults
+  const searchLocation = location || 'India';
+  const searchRole = role || 'recruiter'; // Default to recruiter for decision makers
+  const limit = maxResults || 10;
+  
+  console.log(`[Email Finder] Finding decision makers for: ${company} in ${searchLocation}`);
+  
+  try {
+    // Use hybrid email finder to get company contacts
+    const emailResults = await safeFindEmailsWithHybrid(company, searchRole, {
+      maxResults: limit,
+      useCache: true,
+      verifyEmails: true
+    });
+    
+    // Transform email results to match expected decision makers format
+    const contacts = emailResults.data.contacts.map(email => ({
+      name: email.name,
+      email: email.email,
+      title: email.title,
+      department: email.department,
+      location: searchLocation,
+      linkedin: email.linkedin || null,
+      seniority: email.confidence > 0.8 ? 'senior' : 'manager'
+    }));
+    
+    console.log(`[Email Finder] Found ${contacts.length} contacts using hybrid approach`);
+    
+    // Success response matching frontend expectations
+    return res.json({
+      success: true,
+      data: {
+        contacts: contacts,
+        count: contacts.length,
+        source: emailResults.sources.join(', '),
+        cached: emailResults.cached
+      },
+      meta: {
+        company: company,
+        location: searchLocation,
+        role: searchRole,
+        seniority: ['manager', 'director', 'vp', 'senior'] // Default seniority levels
+      }
+    });
+    
+  } catch (error) {
+    console.log(`[Email Finder] Error: ${error.message}`);
+    console.error('[Email Finder] Error finding decision makers:', error.message);
+    
+    // Generic error response
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to search decision makers',
+      details: error.message
+    });
+  }
+});
+
+// POST route to find company emails using hybrid approach
+app.post('/find-emails', async (req, res) => {
+  const { company, role, maxResults, domain, location, purpose } = req.body;
+  
+  if (!company || company.trim() === '') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Company name is required' 
+    });
+  }
+
+  // Ensure role is properly converted to string to prevent [object Object] logs
+  let searchRole = role || 'recruiter';
+  if (typeof searchRole === 'object' && searchRole !== null) {
+    searchRole = Object.values(searchRole).join(' ');
+  }
+  searchRole = String(searchRole).trim();
+
+  const limit = maxResults || 10;
+  
+  console.log(`[POST /find-emails] Searching for role="${searchRole}" at company="${company}"`);
+  
+  try {
+    const results = await safeFindEmailsWithHybrid(company, domain, searchRole, {
+      maxResults: limit,
+      useCache: true,
+      verifyEmails: true,
+      location: location,
+      purpose: purpose || 'job'
+    });
+    
+    console.log(`[POST /find-emails] Found ${results.count} contacts`);
+    
+    return res.json({
+      success: true,
+      data: results.data,
+      meta: {
+        company: company,
+        domain: domain,
+        role: searchRole,
+        location: location,
+        sources: results.sources,
+        cached: results.cached,
+        verified_count: results.verified_count,
+        discovery_attempts: results.discovery_attempts
+      }
+    });
+    
+  } catch (error) {
+    console.log(`[POST /find-emails] Error: ${error.message}`);
+    console.error('[API Error] /find-emails:', error.message);
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to find emails',
+      details: error.message
+    });
+  }
+});
+
+// GET route to check API status
+app.get('/api-status', (req, res) => {
+  const snovioConfigured = !!process.env.SNOVIO_API_KEY;
+  const abstractConfigured = !!process.env.ABSTRACT_API_KEY;
+  
+  res.json({
+    success: true,
+    apis: {
+      email_finder: {
+        configured: true, // Always available with pattern generation
+        status: 'ready',
+        sources: [
+          'pattern-generation (unlimited)',
+          snovioConfigured ? 'snov.io (50 emails/month)' : 'snov.io (not configured)',
+          abstractConfigured ? 'abstract verification (100/month)' : 'abstract verification (not configured)'
+        ],
+        noBillingRequired: true
+      },
+      groq: {
+        configured: !!process.env.GROQ_API_KEY,
+        status: !!process.env.GROQ_API_KEY ? 'ready' : 'not_configured'
+      },
+      news: {
+        configured: !!process.env.GNEWS_API_KEY,
+        status: !!process.env.GNEWS_API_KEY ? 'ready' : 'not_configured'
+      }
+    }
+  });
 });
 
 // Build a safe fallback email body when the model fails
@@ -379,8 +673,16 @@ function buildFallbackEmail({ role, company, location, comments, resumeBulletsAr
 // Main route: generate email + subject suggestions
 app.post("/generate-email", conditionalUpload, async (req, res) => {
   try {
-    const { role, company, location, tone, comments, purpose: rawPurpose } = req.body;
+    const { role, company, location, tone, purpose: rawPurpose } = req.body || {};
     const purpose = (rawPurpose && String(rawPurpose).trim()) || "job";
+    // Normalize extra comments: accept either 'comments' or 'extraComments' from the client
+    const rawComments = (req.body && (req.body.comments ?? req.body.extraComments)) ?? "";
+    const comments = (typeof rawComments === "string"
+      ? rawComments
+      : Array.isArray(rawComments)
+        ? rawComments.join(" ")
+        : String(rawComments || "")
+    ).trim();
     console.log("[DEBUG] Received data:", { role, company, location, tone, comments, purpose });
 
     // Be lenient: require only role and company to avoid unnecessary 400s
@@ -503,14 +805,15 @@ Use the following structured input:
 ${newsLine || 'No recent company updates found.'}
 
 ### WRITING INSTRUCTIONS:
-1. Keep the total email under 130 words.
+1. Keep the total email under 150 words.
 2. Tone: ${tone || 'Friendly'}, human, concise, and professional.
 3. Structure:
-   - Greeting: “Hi [Company] team,”
-   - Company Hook: Begin with “I recently noticed [company news headline] …” if recent news exists.
-   - Value Proposition: Connect your experience and skills to the company’s domain or recent initiatives.
-   - CTA: End with a short, polite ask (e.g., “Would you be open to a quick chat?”)
-   - Signature: “Best, Shravya Azmani”
+   - Greeting: "Hi [Company] team,"
+   - Company Hook: Begin with "I recently noticed [company news headline] …" if recent news exists.
+   - Value Proposition: Connect your experience and skills to the company's domain or recent initiatives.
+   - **IMPORTANT**: If Comments are provided above (not 'N/A'), you MUST naturally incorporate them into the email. For example, if comments mention "one year work experience", weave it into the value proposition like "With one year of work experience in [relevant field]" or "Having gained one year of hands-on experience in...". Make it flow naturally.
+   - CTA: End with a short, polite ask (e.g., "Would you be open to a quick chat?")
+   - Signature: "Best, Shravya Azmani"
 4. Avoid generic phrases like “I’m passionate about…” or “I believe I can contribute…”.
 5. Keep paragraphs short (2–3 lines max).
 6. Generate 5 subject lines:
@@ -518,12 +821,12 @@ ${newsLine || 'No recent company updates found.'}
    - Next 3 formal / polite
 7. ALSO generate a field “newsSummary”:
    - If company news exists, extract up to 3 short one-line summaries (10–15 words max each)
-   - Example: “Rapido expands bike taxi service to Delhi NCR — Economic Times”
+   - Example: “Rapido expands bike taxi service to Delhi NCR — Economic Times”. after writing the news line, mention this snippet [you can mention any latest news relevant to your email]
    - If no news, return an empty array.
 
 ### OUTPUT EXAMPLE:
 {
-  "emailBody": "Hi Rapido team,\\n\\nI recently noticed Rapido expanded its bike taxi service to Delhi NCR — really exciting! As a B.Tech student experienced in product design and ML, I recently built a gamified finance education app that boosted engagement by 40%. I’d love to bring that same analytical mindset to your product team.\\n\\nWould you be open to a quick chat?\\n\\nBest,\\nShravya Azmani",
+  "emailBody": "Hi Rapido team,\\n\\nI recently noticed Rapido expanded its bike taxi service to Delhi NCR — really exciting! With one year of work experience in product development, I've built a gamified finance education app that boosted engagement by 40%. I'd love to bring that same analytical mindset and hands-on experience to your product team.\\n\\nWould you be open to a quick chat?\\n\\nBest,\\nShravya Azmani",
   "subjectSuggestions": [
     "Bringing Product Thinking to Rapido",
     "Exploring Data-Driven Design at Rapido",
@@ -614,4 +917,9 @@ ${newsLine || 'No recent company updates found.'}
 
 app.listen(port, () => {
   console.log(`✅ Backend running on http://localhost:${port}`);
+  console.log(`📧 Email generation: ${process.env.GROQ_API_KEY ? '✅ Ready' : '⚠️  Missing GROQ_API_KEY'}`);
+  console.log(`🎯 Email discovery: ✅ Ready (Hybrid + ${process.env.SNOVIO_API_KEY ? 'Snov.io' : 'Pattern-only'})`);
+  console.log(`📰 Company news: ${process.env.GNEWS_API_KEY ? '✅ Ready (GNews)' : '⚠️  Add GNEWS_API_KEY for news integration'}`);
+  console.log(`📬 Email finder: ✅ Ready (Pattern + ${process.env.SNOVIO_API_KEY ? 'Snov.io' : 'Pattern-only'})`);
+  console.log(`✉️  Email verification: ${process.env.ABSTRACT_API_KEY ? '✅ Ready (Abstract)' : '⚠️  Pattern-only mode'}`);
 });
