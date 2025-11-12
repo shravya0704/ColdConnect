@@ -1,0 +1,458 @@
+import { useState } from "react";
+
+/**
+ * Infer role from email pattern
+ * @param email - Email address to analyze
+ * @returns Inferred role title
+ */
+const inferRole = (email: string): string => {
+  const emailLower = email.toLowerCase();
+  
+  if (emailLower.includes('hr') || emailLower.includes('recruitment') || emailLower.includes('talent') || emailLower.includes('careers')) {
+    return 'HR Manager';
+  }
+  if (emailLower.includes('product') || emailLower.includes('pm')) {
+    return 'Product Lead';
+  }
+  if (emailLower.includes('partnership') || emailLower.includes('bizdev') || emailLower.includes('alliances')) {
+    return 'Partnerships Manager';
+  }
+  if (emailLower.includes('marketing') || emailLower.includes('growth') || emailLower.includes('brand')) {
+    return 'Marketing Lead';
+  }
+  if (emailLower.includes('engineering') || emailLower.includes('cto') || emailLower.includes('dev') || emailLower.includes('tech')) {
+    return 'Tech Lead';
+  }
+  if (emailLower.includes('sales') || emailLower.includes('business')) {
+    return 'Sales Manager';
+  }
+  
+  return 'General Contact';
+};
+
+/**
+ * Get confidence badge based on confidence score
+ * @param confidence - Confidence score (0-1)
+ * @returns Badge configuration
+ */
+const getConfidenceBadge = (confidence: number) => {
+  if (confidence >= 0.85) {
+    return { text: 'High', className: 'bg-green-100 text-green-800' };
+  }
+  if (confidence >= 0.7) {
+    return { text: 'Medium', className: 'bg-yellow-100 text-yellow-800' };
+  }
+  return { text: 'Low', className: 'bg-gray-100 text-gray-800' };
+};
+
+export default function Generate() {
+  const [role, setRole] = useState("");
+  const [company, setCompany] = useState("");
+  const [location, setLocation] = useState("");
+  const [tone, setTone] = useState("Formal");
+  const [purpose, setPurpose] = useState("job");
+  const [comments, setComments] = useState("");
+  const [resume, setResume] = useState<File | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  
+  // Email discovery state
+  const [isLoadingContacts, setIsLoadingContacts] = useState(false);
+  const [decisionMakers, setDecisionMakers] = useState<any[]>([]);
+  const [contactError, setContactError] = useState<string | null>(null);
+
+  // Open Gmail compose with prefilled fields
+  const openGmail = (to: string, subject: string, body: string) => {
+    const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+      to || ""
+    )}&su=${encodeURIComponent(subject || "Exciting Opportunity")}&body=${encodeURIComponent(
+      body || ""
+    )}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const allowedTypes = [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ];
+      if (allowedTypes.includes(file.type)) {
+        setResume(file);
+      } else {
+        alert('Please select a PDF, DOC, or DOCX file');
+        e.target.value = '';
+      }
+    }
+  };
+
+  // Search for decision makers using Email Discovery System
+  const findDecisionMakers = async () => {
+    if (!company) {
+      alert('Please enter a company name first');
+      return;
+    }
+
+    setIsLoadingContacts(true);
+    setContactError(null);
+    setDecisionMakers([]);
+
+    try {
+      const response = await fetch("http://localhost:5000/find-decision-makers", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          company: company,
+          location: location || 'India',
+          role: role || 'any',
+          seniority: ['manager', 'director', 'vp', 'senior'],
+          maxResults: 10
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || data.details || `HTTP error! status: ${response.status}`);
+      }
+
+      if (data.success && data.data) {
+        setDecisionMakers(data.data.contacts || []);
+      } else {
+        throw new Error(data.error || 'Failed to find decision makers');
+      }
+    } catch (error: any) {
+      console.error('Error finding decision makers:', error);
+      setContactError(error.message || 'Failed to find decision makers. Please try again.');
+    } finally {
+      setIsLoadingContacts(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!role || !company || !location) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    setIsLoading(true);
+    setResult(null);
+
+   try {
+     const formData = new FormData();
+     
+     // Use the resume from state instead of DOM query
+     if (resume) {
+       formData.append("resume", resume);
+       console.log("📎 Resume attached:", resume.name, `(${Math.round(resume.size / 1024)}KB)`);
+     } else {
+       console.log("⚠️ No resume file selected");
+     }
+     
+     formData.append("role", role);
+     formData.append("company", company);
+     formData.append("location", location);
+     formData.append("tone", tone);
+    formData.append("purpose", purpose);
+    // Include extra comments so backend can use them in the generated email
+    if (comments && comments.trim().length > 0) {
+      formData.append("comments", comments.trim());
+      console.log("📝 Added comments to request:", comments.trim().slice(0, 120));
+    }
+
+    const response = await fetch("http://localhost:5000/generate-email", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    setResult(data);
+  } catch (error) {
+    console.error('Error generating email:', error);
+    alert('Failed to generate email. Please check if the backend is running.');
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+return (
+  <div className="min-h-screen bg-gradient-to-br from-white via-primary-50 to-primary-100 flex items-center justify-center py-12">
+    <div className="bg-white rounded-2xl shadow-2xl p-10 w-full max-w-4xl mx-6 border border-gray-100">
+      <div className="text-center mb-10">
+        <h1 className="text-4xl font-bold text-gradient mb-4">Generate Your Perfect Email</h1>
+        <div className="w-20 h-1 bg-gradient-to-r from-primary-600 to-primary-800 mx-auto rounded-full"></div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Purpose *</label>
+          <select
+            value={purpose}
+            onChange={(e) => setPurpose(e.target.value)}
+            className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200"
+            required
+          >
+            <option value="job">Job</option>
+            <option value="internship">Internship</option>
+            <option value="client">Client</option>
+            <option value="feedback">Feedback</option>
+            <option value="networking">Networking</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Choose your Domain *</label>
+          <input
+            type="text"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200"
+            placeholder="e.g., Software Engineer, Marketing Manager"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Choose your Company *</label>
+          <input
+            type="text"
+            value={company}
+            onChange={(e) => setCompany(e.target.value)}
+            className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200"
+            placeholder="e.g., Google, Microsoft, Startup Inc."
+            required
+          />
+          <button
+            type="button"
+            onClick={findDecisionMakers}
+            disabled={isLoadingContacts || !company}
+            className="mt-3 w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center gap-2"
+          >
+            {isLoadingContacts ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                Finding Decision Makers...
+              </>
+            ) : (
+              <>
+                🎯 Find Decision Makers
+              </>
+            )}
+          </button>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Choose your Location *</label>
+          <input
+            type="text"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200"
+            placeholder="e.g., San Francisco, New York, Remote"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Choose Email Tone</label>
+          <select
+            value={tone}
+            onChange={(e) => setTone(e.target.value)}
+            className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200"
+          >
+            <option value="Formal">Formal</option>
+            <option value="Friendly">Friendly</option>
+            <option value="Bold">Bold</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Upload Resume (Optional)</label>
+          <input
+            type="file"
+            onChange={handleFileChange}
+            accept=".pdf,.doc,.docx"
+            className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+          />
+          {resume && (
+            <p className="text-sm text-primary-600 mt-2 font-medium">✓ {resume.name} selected</p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Extra Comments</label>
+          <textarea
+            value={comments}
+            onChange={(e) => setComments(e.target.value)}
+            className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 h-28 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200"
+            placeholder="Any additional information or specific requests..."
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={isLoading}
+          className="w-full btn-primary text-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+        >
+          {isLoading ? (
+            <span className="flex items-center justify-center gap-2">
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              Generating...
+            </span>
+          ) : (
+            'Generate Email'
+          )}
+        </button>
+      </form>
+
+      {result && (
+        <div className="mt-10 p-8 bg-gradient-to-r from-primary-50 to-primary-100 rounded-2xl border border-primary-200">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Your Generated Email</h2>
+          <div className="space-y-6">
+            {Array.isArray(result.subjectSuggestions) && result.subjectSuggestions.length > 0 && (
+              <div className="bg-white p-4 rounded-lg border border-primary-200">
+                <span className="text-sm font-semibold text-primary-700">Subject Suggestions:</span>
+                <ul className="mt-3 space-y-2">
+                  {result.subjectSuggestions.map((subj: string, idx: number) => (
+                    <li key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border">
+                      <span className="text-gray-900 font-medium">{subj}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => navigator.clipboard.writeText(subj)}
+                          className="text-primary-600 hover:text-primary-700 text-sm font-medium transition-colors"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          onClick={() => openGmail("", subj, result?.emailBody || "")}
+                          className="ml-2 inline-flex items-center px-3 py-1.5 rounded-md bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
+                        >
+                          Compose in Gmail
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="bg-white p-6 rounded-lg border border-primary-200">
+              <span className="text-sm font-semibold text-primary-700">Email Body:</span>
+              <div className="mt-3 text-gray-900 whitespace-pre-wrap leading-relaxed">
+                {result.emailBody}
+              </div>
+            </div>
+              {result.newsSummary && result.newsSummary.length > 0 && (
+                <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                  <div className="text-lg font-semibold mb-2">Recent Company News</div>
+                  <ul className="list-disc pl-5 space-y-1 text-sm text-gray-700">
+                    {result.newsSummary.map((news: string, idx: number) => (
+                      <li key={idx}>{news}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+          </div>
+        </div>
+      )}
+
+      {/* Decision Makers Results */}
+      {(decisionMakers.length > 0 || contactError) && (
+        <div className="mt-10 p-8 bg-gradient-to-r from-blue-50 to-blue-100 rounded-2xl border border-blue-200">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center flex items-center justify-center gap-2">
+            🎯 Decision Makers at {company}
+          </h2>
+          
+          {contactError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-6">
+              <div className="font-semibold">Error finding contacts:</div>
+              <div className="mt-1">{contactError}</div>
+              {contactError.includes('invalid') && (
+                <div className="mt-3 text-sm">
+                  💡 Need help? Check the <a href="/HYBRID_EMAIL_SETUP.md" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Email Discovery Setup Guide</a>
+                </div>
+              )}
+            </div>
+          )}
+
+          {decisionMakers.length > 0 && (
+            <div className="space-y-4">
+              <div className="text-center text-sm text-gray-600 mb-4">
+                Found {decisionMakers.length} decision maker{decisionMakers.length !== 1 ? 's' : ''}
+              </div>
+              {decisionMakers.map((contact, idx) => {
+                const inferredRole = inferRole(contact.email || '');
+                const confidenceBadge = getConfidenceBadge(contact.confidence || 0);
+                
+                return (
+                <div key={idx} className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm">
+                  <div className="flex justify-between items-start mb-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="text-lg font-semibold text-gray-900">{contact.name}</h3>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${confidenceBadge.className}`}>
+                          {confidenceBadge.text}
+                        </span>
+                      </div>
+                      <p className="text-gray-600">{contact.title || inferredRole}</p>
+                      <div className="text-sm text-gray-500">
+                        {contact.department && <span>{contact.department}</span>}
+                        {contact.department && contact.location && <span> • </span>}
+                        {contact.location && <span>{contact.location}</span>}
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {contact.email && (
+                        <button
+                          onClick={() => openGmail(contact.email, result?.subjectSuggestions?.[0] || "Exciting Opportunity", result?.emailBody || "")}
+                          className="inline-flex items-center px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+                        >
+                          📧 Email
+                        </button>
+                      )}
+                      {contact.linkedin && (
+                        <a
+                          href={contact.linkedin}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-4 py-2 rounded-md bg-blue-100 text-blue-700 text-sm font-medium hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+                        >
+                          🔗 LinkedIn
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {contact.email && (
+                    <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+                      <span className="text-xs font-semibold text-gray-600">Email:</span>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-sm font-mono text-gray-800">{contact.email}</span>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(contact.email)}
+                          className="text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  </div>
+);
+}

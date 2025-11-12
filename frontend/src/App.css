@@ -1,0 +1,11 @@
+/* Clean, minimal styles for the application */
+#root {
+  min-height: 100vh;
+  width: 100%;
+}
+
+/* Remove any default padding/margin that might interfere */
+.app-container {
+  min-height: 100vh;
+  width: 100%;
+}
