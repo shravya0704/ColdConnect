@@ -103,6 +103,27 @@ app.use(
   })
 );
 
+// Analytics routes (Supabase) - dynamically imported after dotenv loads
+(async () => {
+  try {
+    const { default: analyticsRouter } = await import('./routes/analytics.js');
+    app.use('/api/analytics', analyticsRouter);
+  } catch (error) {
+    console.warn('[Analytics] Failed to load analytics router:', error.message);
+  }
+})();
+
+// Email tracking routes (Supabase) - dynamically imported after dotenv loads
+(async () => {
+  try {
+    const { default: emailsRouter } = await import('./routes/emails.js');
+    app.use('/api/emails', emailsRouter);
+    app.use('/api/analytics', emailsRouter); // Mount GET /api/analytics endpoint
+  } catch (error) {
+    console.warn('[Emails] Failed to load emails router:', error.message);
+  }
+})();
+
 
 // Summarize resume text into key bullet points using Groq
 async function summarizeResume(text) {

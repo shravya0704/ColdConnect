@@ -1,6 +1,63 @@
 import { useState } from "react";
 
 /**
+ * Send analytics event to backend
+ * @param event_type - Type of event to log
+ * @param data - Additional data to include with the event
+ */
+const logEvent = async (event_type: string, data?: any) => {
+  try {
+    await fetch("http://localhost:5000/api/analytics/log", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        event_type,
+        ...data
+      }),
+    });
+  } catch (error) {
+    // Silently fail if analytics is down - don't break the UI
+    console.warn('Analytics tracking failed:', error);
+  }
+};
+
+/**
+ * Save email to dashboard tracking
+ * @param emailData - Email data to save
+ * @returns Promise with the saved email data
+ */
+const saveEmailToDatabase = async (emailData: {
+  emailBody: string;
+  company: string;
+  domain: string;
+  purpose: string;
+  tone: string;
+}) => {
+  try {
+    const response = await fetch("http://localhost:5000/api/emails/add", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(emailData),
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to save email');
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error saving email:', error);
+    throw error;
+  }
+};
+
+/**
  * Infer role from email pattern
  * @param email - Email address to analyze
  * @returns Inferred role title
@@ -61,14 +118,72 @@ export default function Generate() {
   const [decisionMakers, setDecisionMakers] = useState<any[]>([]);
   const [contactError, setContactError] = useState<string | null>(null);
 
+  // Email tracking state
+  const [emailSaved, setEmailSaved] = useState(false);
+  const [showConfirmButtons, setShowConfirmButtons] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [isSavingEmail, setIsSavingEmail] = useState(false);
+
   // Open Gmail compose with prefilled fields
   const openGmail = (to: string, subject: string, body: string) => {
+    // Log compose click event
+    logEvent('compose_click');
+    
     const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
       to || ""
     )}&su=${encodeURIComponent(subject || "Exciting Opportunity")}&body=${encodeURIComponent(
       body || ""
     )}`;
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  // Show toast notification
+  const showToastNotification = (message: string) => {
+    setToastMessage(message);
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 3000);
+  };
+
+  // Handle email sent confirmation
+  const handleEmailSent = async () => {
+    if (!result?.emailBody || !company) {
+      showToastNotification("Error: Missing email data");
+      return;
+    }
+
+    setIsSavingEmail(true);
+    
+    try {
+      // Extract domain from company name (simple approach)
+      const domain = `${company.toLowerCase().replace(/\s+/g, '')}.com`;
+      
+      await saveEmailToDatabase({
+        emailBody: result.emailBody,
+        company: company,
+        domain: domain,
+        purpose: purpose,
+        tone: tone,
+      });
+      
+      setEmailSaved(true);
+      setShowConfirmButtons(false);
+      showToastNotification("Email saved to dashboard!");
+      
+      // Log analytics event
+      logEvent('email_sent', { company, tone, purpose });
+    } catch (error: any) {
+      console.error('Failed to save email:', error);
+      showToastNotification("Failed to save email. Please try again.");
+    } finally {
+      setIsSavingEmail(false);
+    }
+  };
+
+  // Handle didn't send email
+  const handleDidntSend = () => {
+    setShowConfirmButtons(false);
+    logEvent('email_not_sent', { company, tone, purpose });
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -143,6 +258,9 @@ export default function Generate() {
 
     setIsLoading(true);
     setResult(null);
+    // Reset email tracking state
+    setEmailSaved(false);
+    setShowConfirmButtons(false);
 
    try {
      const formData = new FormData();
@@ -177,6 +295,10 @@ export default function Generate() {
 
     const data = await response.json();
     setResult(data);
+    setShowConfirmButtons(true); // Show confirmation buttons after email generation
+    
+    // Log successful email generation
+    logEvent('generate_email', { tone, purpose, company, result: 'success' });
   } catch (error) {
     console.error('Error generating email:', error);
     alert('Failed to generate email. Please check if the backend is running.');
@@ -189,7 +311,18 @@ return (
   <div className="min-h-screen bg-gradient-to-br from-white via-primary-50 to-primary-100 flex items-center justify-center py-12">
     <div className="bg-white rounded-2xl shadow-2xl p-10 w-full max-w-4xl mx-6 border border-gray-100">
       <div className="text-center mb-10">
-        <h1 className="text-4xl font-bold text-gradient mb-4">Generate Your Perfect Email</h1>
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex-1"></div>
+          <h1 className="text-4xl font-bold text-gradient flex-1">Generate Your Perfect Email</h1>
+          <div className="flex-1 flex justify-end">
+            <button
+              onClick={() => window.location.href = '/dashboard'}
+              className="px-4 py-2 bg-primary-100 text-primary-700 rounded-lg text-sm font-medium hover:bg-primary-200 transition-colors"
+            >
+              📊 View Dashboard
+            </button>
+          </div>
+        </div>
         <div className="w-20 h-1 bg-gradient-to-r from-primary-600 to-primary-800 mx-auto rounded-full"></div>
       </div>
 
@@ -350,6 +483,54 @@ return (
                 {result.emailBody}
               </div>
             </div>
+            
+            {/* Email Confirmation Tracking */}
+            {showConfirmButtons && !emailSaved && (
+              <div className="bg-white p-4 rounded-lg border border-primary-200">
+                <span className="text-sm font-semibold text-primary-700">Did you send this email?</span>
+                <div className="mt-3 flex gap-3">
+                  <button
+                    onClick={handleEmailSent}
+                    disabled={isSavingEmail}
+                    className="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isSavingEmail ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        ✅ I sent this email
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={handleDidntSend}
+                    disabled={isSavingEmail}
+                    className="flex-1 px-4 py-3 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors disabled:opacity-50"
+                  >
+                    ❌ Didn't send
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Email Saved Confirmation */}
+            {emailSaved && (
+              <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                <div className="flex items-center justify-center gap-2 text-green-700">
+                  <span className="text-lg">✅</span>
+                  <span className="text-sm font-semibold">Email saved to dashboard!</span>
+                  <button
+                    onClick={() => window.location.href = '/dashboard'}
+                    className="ml-2 px-3 py-1 bg-green-600 text-white rounded text-xs font-medium hover:bg-green-700 transition-colors"
+                  >
+                    View Dashboard
+                  </button>
+                </div>
+              </div>
+            )}
               {result.newsSummary && result.newsSummary.length > 0 && (
                 <div className="mt-4 p-4 bg-gray-50 rounded-lg">
                   <div className="text-lg font-semibold mb-2">Recent Company News</div>
@@ -453,6 +634,14 @@ return (
         </div>
       )}
     </div>
+
+    {/* Toast Notification */}
+    {showToast && (
+      <div className="fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2 animate-fade-in">
+        <span className="text-lg">✅</span>
+        <span className="font-medium">{toastMessage}</span>
+      </div>
+    )}
   </div>
 );
 }
