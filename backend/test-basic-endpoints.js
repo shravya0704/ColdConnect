@@ -2,7 +2,7 @@
 async function testEmailEndpointsBasic() {
   console.log('🧪 Testing Email Tracking Endpoints (Basic)...\n');
   
-  const BASE_URL = 'http://localhost:5000';
+  const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
   
   // Test 1: Validation on POST /api/emails/add
   try {

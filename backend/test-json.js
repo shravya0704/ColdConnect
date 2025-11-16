@@ -3,7 +3,7 @@ async function testJsonRequest() {
   try {
     console.log('Testing JSON request...');
     
-    const response = await fetch('http://localhost:5000/generate-email', {
+    const response = await fetch(`${process.env.BACKEND_URL || 'http://localhost:5000'}/generate-email`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

@@ -27,7 +27,7 @@ async function testFinalResumeUpload() {
     
     console.log('📤 Sending request to backend with resume...');
     
-    const response = await fetch('http://localhost:5000/generate-email', {
+    const response = await fetch(`${process.env.BACKEND_URL || 'http://localhost:5000'}/generate-email`, {
       method: 'POST',
       body: form,
       headers: form.getHeaders()

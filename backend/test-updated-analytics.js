@@ -2,7 +2,7 @@
 async function testUpdatedAnalytics() {
   console.log('🧪 Testing Updated Analytics Endpoint...\n');
   
-  const BASE_URL = 'http://localhost:5000';
+  const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
   
   try {
     console.log('1️⃣  Fetching updated analytics data...');

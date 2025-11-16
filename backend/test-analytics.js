@@ -2,7 +2,7 @@
 async function testEndpoints() {
   console.log('🧪 Testing ColdConnect server endpoints...\n');
   
-  const BASE_URL = 'http://localhost:5000';
+  const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
   
   // Test 1: Health check
   try {

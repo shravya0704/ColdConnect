@@ -2,7 +2,7 @@
 async function testSupabaseConnection() {
   console.log('🔍 Diagnosing Supabase emails table...\n');
   
-  const BASE_URL = 'http://localhost:5000';
+  const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
   
   // Test 1: Check if we can read from the table (GET /api/analytics)
   try {
@@ -89,7 +89,7 @@ async function testStatusUpdate(emailId) {
 }
 
 // Run the tests
-const BASE_URL = 'http://localhost:5000';
+const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 testSupabaseConnection().then(emailId => {
   if (emailId) {
     testStatusUpdate(emailId);

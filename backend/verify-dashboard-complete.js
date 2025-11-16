@@ -2,7 +2,7 @@
 async function verifyDashboardComplete() {
   console.log('🎯 Final Dashboard Verification...\n');
   
-  const BASE_URL = 'http://localhost:5000';
+  const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
   
   try {
     // 1. Test analytics endpoint with all new fields

@@ -97,7 +97,12 @@ function conditionalUpload(req, res, next) {
 
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:5176", "http://localhost:5178"],
+    origin: [
+      "https://coldconnect-dzpp.vercel.app",
+      "http://localhost:5173", 
+      "http://localhost:5176", 
+      "http://localhost:5178"
+    ],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Accept", "Authorization"],
   })
@@ -123,6 +128,46 @@ app.use(
     console.warn('[Emails] Failed to load emails router:', error.message);
   }
 })();
+
+// Google OAuth callback route for production
+app.get('/auth/google/callback', (req, res) => {
+  const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://coldconnect-dzpp.vercel.app';
+  
+  // Extract auth parameters from query
+  const { access_token, refresh_token, expires_in, token_type } = req.query;
+  
+  // Redirect to frontend with auth parameters
+  const redirectUrl = new URL(frontendUrl);
+  if (access_token) redirectUrl.searchParams.set('access_token', access_token);
+  if (refresh_token) redirectUrl.searchParams.set('refresh_token', refresh_token);
+  if (expires_in) redirectUrl.searchParams.set('expires_in', expires_in);
+  if (token_type) redirectUrl.searchParams.set('token_type', token_type);
+  
+  console.log(`[Auth] Redirecting to frontend: ${redirectUrl.toString()}`);
+  res.redirect(redirectUrl.toString());
+});
+
+// Google OAuth initiation route
+app.get('/auth/google', (req, res) => {
+  const backendUrl = process.env.BACKEND_URL || 'https://coldconnect-putf.onrender.com';
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = `${backendUrl}/auth/google/callback`;
+  
+  if (!clientId) {
+    return res.status(500).json({ error: 'Google OAuth not configured' });
+  }
+  
+  const googleAuthUrl = `https://accounts.google.com/oauth/authorize?` +
+    `client_id=${clientId}&` +
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+    `response_type=code&` +
+    `scope=${encodeURIComponent('openid email profile')}&` +
+    `access_type=offline&` +
+    `prompt=consent`;
+  
+  console.log(`[Auth] Redirecting to Google OAuth: ${googleAuthUrl}`);
+  res.redirect(googleAuthUrl);
+});
 
 
 // Summarize resume text into key bullet points using Groq
@@ -937,10 +982,20 @@ ${newsLine || 'No recent company updates found.'}
 });
 
 app.listen(port, () => {
-  console.log(`✅ Backend running on http://localhost:${port}`);
+  const backendUrl = process.env.BACKEND_URL || 'https://coldconnect-putf.onrender.com';
+  const isProduction = process.env.NODE_ENV === 'production';
+  const serverUrl = isProduction ? backendUrl : `http://localhost:${port}`;
+  
+  console.log(`✅ Backend running on ${serverUrl}`);
   console.log(`📧 Email generation: ${process.env.GROQ_API_KEY ? '✅ Ready' : '⚠️  Missing GROQ_API_KEY'}`);
   console.log(`🎯 Email discovery: ✅ Ready (Hybrid + ${process.env.SNOVIO_API_KEY ? 'Snov.io' : 'Pattern-only'})`);
   console.log(`📰 Company news: ${process.env.GNEWS_API_KEY ? '✅ Ready (GNews)' : '⚠️  Add GNEWS_API_KEY for news integration'}`);
   console.log(`📬 Email finder: ✅ Ready (Pattern + ${process.env.SNOVIO_API_KEY ? 'Snov.io' : 'Pattern-only'})`);
   console.log(`✉️  Email verification: ${process.env.ABSTRACT_API_KEY ? '✅ Ready (Abstract)' : '⚠️  Pattern-only mode'}`);
+  
+  if (process.env.GOOGLE_CLIENT_ID) {
+    console.log(`🔐 Google OAuth: ✅ Ready (${backendUrl}/auth/google)`);
+  } else {
+    console.log(`🔐 Google OAuth: ⚠️  Missing GOOGLE_CLIENT_ID`);
+  }
 });

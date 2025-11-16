@@ -2,7 +2,7 @@
 async function testDashboardEndpoints() {
   console.log('🧪 Testing Dashboard API Integration...\n');
   
-  const BASE_URL = 'http://localhost:5000';
+  const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
   
   // Test 1: Analytics data fetch
   try {
@@ -84,7 +84,7 @@ async function testStatusUpdate(email) {
 }
 
 // Run the tests
-const BASE_URL = 'http://localhost:5000';
+const BASE_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 testDashboardEndpoints().then(firstEmail => {
   testStatusUpdate(firstEmail);
   console.log('\n🎉 Dashboard API tests complete!');
