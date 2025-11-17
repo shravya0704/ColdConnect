@@ -1,14 +1,47 @@
-import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import Home from './pages/Home'
 import Generate from './pages/Generate'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
-import AuthCallback from './pages/AuthCallback'
 import Auth from './components/Auth'
 import { supabase } from './supabaseClient'
 import type { User } from '@supabase/supabase-js'
+
+function ResetPassword() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="max-w-md w-full p-6 bg-white rounded shadow">
+        <h1 className="text-xl font-semibold mb-4">Reset Password</h1>
+        <p className="text-sm text-gray-600">To reset your password, follow the instructions sent to your email.</p>
+      </div>
+    </div>
+  )
+}
+
+// Redirects any `type=recovery` URL to the reset-password route and listens for Supabase recovery event
+function RecoveryRedirect() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    if (location.hash && location.hash.includes('type=recovery')) {
+      navigate('/reset-password' + location.hash, { replace: true })
+    }
+  }, [location, navigate])
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        navigate('/reset-password', { replace: true })
+      }
+    })
+    return () => subscription.unsubscribe()
+  }, [navigate])
+
+  return null
+}
 
 // ProtectedRoute component
 function ProtectedRoute({ children }: { children: ReactNode }) {
@@ -60,6 +93,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 function App() {
   return (
     <BrowserRouter>
+      <RecoveryRedirect />
       <div className="min-h-screen flex flex-col">
         <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-gray-200 shadow-sm">
           <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -105,7 +139,8 @@ function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
-            <Route path="/auth/callback" element={<AuthCallback />} />
+            {/** OAuth removed: no auth callback route */}
+            <Route path="/reset-password" element={<ResetPassword />} />
 
             <Route
               path="/generate"
