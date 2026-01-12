@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { supabase } from '../supabaseClient';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 // Interface for email data
@@ -34,7 +35,13 @@ export default function Dashboard() {
   const fetchAnalyticsData = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:5000/api/analytics');
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const response = await fetch('http://localhost:5000/api/analytics', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -60,13 +67,16 @@ export default function Dashboard() {
   const updateEmailStatus = async (emailId: number, newStatus: string) => {
     try {
       setUpdatingStatus(emailId);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
       const response = await fetch('http://localhost:5000/api/emails/update-status', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          email_id: emailId,
+          emailId: emailId,
           status: newStatus,
         }),
       });

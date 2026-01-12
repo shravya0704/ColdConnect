@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { supabase } from "../supabaseClient";
 
 /**
  * Send analytics event to backend
@@ -7,10 +8,13 @@ import { useState } from "react";
  */
 const logEvent = async (event_type: string, data?: any) => {
   try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
     await fetch("http://localhost:5000/api/analytics/log", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
         event_type,
@@ -36,10 +40,13 @@ const saveEmailToDatabase = async (emailData: {
   tone: string;
 }) => {
   try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
     const response = await fetch("http://localhost:5000/api/emails/add", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(emailData),
     });
@@ -215,10 +222,13 @@ export default function Generate() {
     setDecisionMakers([]);
 
     try {
-      const response = await fetch("http://localhost:5000/find-decision-makers", {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        const response = await fetch("http://localhost:5000/find-decision-makers", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           company: company,
@@ -284,8 +294,13 @@ export default function Generate() {
       console.log("📝 Added comments to request:", comments.trim().slice(0, 120));
     }
 
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
     const response = await fetch("http://localhost:5000/generate-email", {
       method: "POST",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: formData,
     });
 

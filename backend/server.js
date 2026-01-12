@@ -6,6 +6,7 @@ import Groq from "groq-sdk";
 import path from "path";
 import { fileURLToPath } from "url";
 import { findEmailsWithHybrid } from './lib/hybridEmailFinder.js';
+import { authMiddleware } from './middleware/auth.js';
 
 // 🧩 FIX EMAIL FINDER MAP ERROR
 // This ensures we never call .map() on undefined when using findEmailsWithHybrid()
@@ -122,8 +123,9 @@ app.use(
 (async () => {
   try {
     const { default: emailsRouter } = await import('./routes/emails.js');
-    app.use('/api/emails', emailsRouter);
-    app.use('/api/analytics', emailsRouter); // Mount GET /api/analytics endpoint
+    // Protect email tracking + analytics with auth
+    app.use('/api/emails', authMiddleware, emailsRouter);
+    app.use('/api/analytics', authMiddleware, emailsRouter); // Mount GET /api/analytics endpoint
   } catch (error) {
     console.warn('[Emails] Failed to load emails router:', error.message);
   }
@@ -561,7 +563,7 @@ app.get('/health', (_req, res) => {
 });
 
 // POST route to find decision makers (unified with email finder)
-app.post('/find-decision-makers', async (req, res) => {
+app.post('/find-decision-makers', authMiddleware, async (req, res) => {
   // Extract and validate fields from req.body
   const { company, location, role, seniority, maxResults } = req.body;
   
@@ -632,7 +634,7 @@ app.post('/find-decision-makers', async (req, res) => {
 });
 
 // POST route to find company emails using hybrid approach
-app.post('/find-emails', async (req, res) => {
+app.post('/find-emails', authMiddleware, async (req, res) => {
   const { company, role, maxResults, domain, location, purpose } = req.body;
   
   if (!company || company.trim() === '') {
@@ -737,7 +739,7 @@ function buildFallbackEmail({ role, company, location, comments, resumeBulletsAr
 }
 
 // Main route: generate email + subject suggestions
-app.post("/generate-email", conditionalUpload, async (req, res) => {
+app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) => {
   try {
     const { role, company, location, tone, purpose: rawPurpose } = req.body || {};
     const purpose = (rawPurpose && String(rawPurpose).trim()) || "job";
