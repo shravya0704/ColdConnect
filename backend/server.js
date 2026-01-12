@@ -96,24 +96,36 @@ function conditionalUpload(req, res, next) {
   return next();
 }
 
+const allowedOrigins = [
+  "https://coldconnect-dzpp.vercel.app",
+];
+
 app.use(
   cors({
-    origin: [
-      "https://coldconnect-dzpp.vercel.app",
-      "http://localhost:5173", 
-      "http://localhost:5176", 
-      "http://localhost:5178"
-    ],
-    methods: ["GET", "POST"],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      // allow localhost:5173-5189
+      const localhostMatch = origin.match(/^http:\/\/localhost:(\d{4,5})$/);
+      if (localhostMatch) {
+        const port = Number(localhostMatch[1]);
+        if (port >= 5173 && port <= 5189) return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
+    methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Accept", "Authorization"],
+    credentials: false,
+    optionsSuccessStatus: 204,
   })
 );
+
 
 // Analytics routes (Supabase) - dynamically imported after dotenv loads
 (async () => {
   try {
     const { default: analyticsRouter } = await import('./routes/analytics.js');
-    app.use('/api/analytics', analyticsRouter);
+    app.use('/api/analytics', authMiddleware, analyticsRouter);
   } catch (error) {
     console.warn('[Analytics] Failed to load analytics router:', error.message);
   }
@@ -125,7 +137,6 @@ app.use(
     const { default: emailsRouter } = await import('./routes/emails.js');
     // Protect email tracking + analytics with auth
     app.use('/api/emails', authMiddleware, emailsRouter);
-    app.use('/api/analytics', authMiddleware, emailsRouter); // Mount GET /api/analytics endpoint
   } catch (error) {
     console.warn('[Emails] Failed to load emails router:', error.message);
   }
