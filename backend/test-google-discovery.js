@@ -108,7 +108,7 @@ async function testHybridEmailFinder() {
     );
     
     console.log(`✅ Found ${results.count} contacts from sources: ${results.sources.join(', ')}`);
-    console.log('Discovery attempts:', results.discovery_attempts);
+    // Discovery attempts removed; sources list shows what was used
     
     if (results.data.contacts.length > 0) {
       console.log('Sample contact:', results.data.contacts[0]);

@@ -16,7 +16,7 @@ async function testRealWorld() {
   );
   
   stripeHiring.forEach((email, i) => {
-    console.log(`${i+1}. ${email.email} (confidence: ${email.confidence}) - ${email.title}`);
+    console.log(`${i+1}. ${email.email} [${email.confidenceLevel}] - ${email.type || 'role-based'}`);
   });
   
   // Test with Shopify (partnership)
@@ -28,7 +28,7 @@ async function testRealWorld() {
   );
   
   shopifyPartnership.forEach((email, i) => {
-    console.log(`${i+1}. ${email.email} (confidence: ${email.confidence}) - ${email.title}`);
+    console.log(`${i+1}. ${email.email} [${email.confidenceLevel}] - ${email.type || 'role-based'}`);
   });
   
   // Test with Airbnb (tech)
@@ -40,7 +40,7 @@ async function testRealWorld() {
   );
   
   airbnbTech.forEach((email, i) => {
-    console.log(`${i+1}. ${email.email} (confidence: ${email.confidence}) - ${email.title}`);
+    console.log(`${i+1}. ${email.email} [${email.confidenceLevel}] - ${email.type || 'role-based'}`);
   });
 }
 

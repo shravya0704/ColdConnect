@@ -6,6 +6,7 @@ import Groq from "groq-sdk";
 import path from "path";
 import { fileURLToPath } from "url";
 import { findEmailsWithHybrid } from './lib/hybridEmailFinder.js';
+import { isValidCompanyDomain } from './lib/utils/domain.js';
 import { authMiddleware } from './middleware/auth.js';
 
 // 🧩 FIX EMAIL FINDER MAP ERROR
@@ -42,6 +43,10 @@ console.log("[DEBUG] ABSTRACT_API_KEY from .env:", process.env.ABSTRACT_API_KEY 
 const app = express();
 const port = process.env.PORT || 5000;
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// Per-user immutable domain confirmation store (in-memory)
+// Keyed by Supabase user id; value: { domain, confirmedAt }
+const confirmedDomains = new Map();
 
 // Stable model constants (use these to avoid retired/preview models)
 const MODEL_SUMMARIZATION = "llama-3.3-70b-versatile";
@@ -97,7 +102,9 @@ function conditionalUpload(req, res, next) {
 }
 
 const allowedOrigins = [
-  "https://coldconnect-dzpp.vercel.app",
+  "https://coldconnect-dzpp.vercel.app", // older preview
+  "https://cold-connect.vercel.app",     // current production
+  "https://coldconnect.vercel.app",      // fallback variant
 ];
 
 app.use(
@@ -119,6 +126,91 @@ app.use(
     optionsSuccessStatus: 204,
   })
 );
+
+// ---- Domain Suggestion & Confirmation ----
+// Suggest 1–3 likely official domains using Groq
+app.post('/domains/suggest', authMiddleware, async (req, res) => {
+  try {
+    const { company, location } = req.body || {};
+    if (!company || String(company).trim() === '') {
+      return res.status(400).json({ success: false, error: 'Company name is required for suggestions' });
+    }
+
+    const systemPrompt = 'You propose likely official company web domains. Return transparent suggestions only.';
+    const userPrompt = `Company: ${company}\nLocation (optional): ${location || 'N/A'}\n\nTask: Suggest 1–3 likely official web domains for this company.\nReturn ONLY valid JSON array of objects: [{"domain":"...","probability":0-100,"explanation":"..."}].\nRules:\n- Provide probability as an integer 0–100 representing confidence.\n- Provide a short, honest explanation (e.g., "commonly used brand domain in India").\n- Do not claim verification.\n- Use public naming conventions; avoid speculative subsidiaries.\n- Prefer domains with known MX where applicable.\n`;
+
+    const completion = await safeGroqRequest(groq, {
+      model: MODEL_GENERAL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 300,
+    });
+
+    const content = completion.choices?.[0]?.message?.content || '';
+    let suggestions = [];
+    try {
+      const match = content.match(/\[[\s\S]*\]/);
+      const jsonStr = match ? match[0] : content;
+      const parsed = JSON.parse(jsonStr);
+      if (Array.isArray(parsed)) suggestions = parsed;
+    } catch (_) {
+      suggestions = [];
+    }
+
+    // Validate and normalize suggestions
+    const normalized = (Array.isArray(suggestions) ? suggestions : []).map(s => {
+      const domain = String(s.domain || '').trim().toLowerCase();
+      const prob = Math.max(0, Math.min(100, parseInt(s.probability || 0, 10) || 0));
+      const explanation = String(s.explanation || '').trim();
+      return { domain, probability: prob, explanation };
+    }).filter(s => isValidCompanyDomain(s.domain));
+
+    // Optional MX check: boost probability if MX exists
+    const withMx = await Promise.all(normalized.map(async s => {
+      try {
+        const mxOk = await (await import('./lib/utils/domain.js')).hasMxRecords(s.domain);
+        if (mxOk && s.probability < 90) return { ...s, probability: Math.min(95, s.probability + 10) };
+        return s;
+      } catch {
+        return s;
+      }
+    }));
+
+    return res.json({ success: true, data: withMx.slice(0, 3) });
+  } catch (err) {
+    console.error('[Domains] Suggest error:', err?.message || err);
+    return res.status(500).json({ success: false, error: 'Failed to suggest domains' });
+  }
+});
+
+// Confirm selected domain as immutable app state
+app.post('/domains/confirm', authMiddleware, async (req, res) => {
+  try {
+    const { domain, replace } = req.body || {};
+    const d = String(domain || '').trim().toLowerCase();
+    if (!isValidCompanyDomain(d)) {
+      return res.status(400).json({ success: false, error: 'Please enter a valid company domain (e.g., microsoft.com)' });
+    }
+    const existing = confirmedDomains.get(req.user?.id);
+    if (existing && existing.domain !== d && !replace) {
+      return res.status(409).json({ success: false, error: 'Domain already confirmed and locked. Pass replace=true to update explicitly.' });
+    }
+    confirmedDomains.set(req.user?.id, { domain: d, confirmedAt: Date.now() });
+    return res.json({ success: true, domain: d });
+  } catch (err) {
+    console.error('[Domains] Confirm error:', err?.message || err);
+    return res.status(500).json({ success: false, error: 'Failed to confirm domain' });
+  }
+});
+
+// Get current confirmed domain
+app.get('/domains/current', authMiddleware, (req, res) => {
+  const entry = confirmedDomains.get(req.user?.id);
+  return res.json({ success: true, domain: entry?.domain || null });
+});
 
 
 // Analytics routes (Supabase) - dynamically imported after dotenv loads
@@ -479,75 +571,7 @@ async function extractHardSkills(text) {
   }
 }
 
-// Fetch a short recent news headline about the company
-async function fetchCompanyNews(company) {
-  try {
-    const apiKey = process.env.GNEWS_API_KEY;
-    if (!apiKey) {
-      console.warn("[Company News] GNEWS_API_KEY not configured");
-      return null;
-    }
-    
-    if (!company) {
-      console.warn("[Company News] No company name provided");
-      return null;
-    }
-
-    const q = encodeURIComponent(company);
-    const url = `https://gnews.io/api/v4/search?q=${q}&lang=en&max=3&token=${apiKey}`;
-    console.log(`[Company News] Fetching news for: ${company}`);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000); // Increased timeout
-
-    const resp = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    console.log(`[Company News] API response status: ${resp.status}`);
-
-    if (!resp.ok) {
-      if (resp.status === 401) {
-        console.error("[Company News] Invalid API key");
-      } else if (resp.status === 429) {
-        console.error("[Company News] Rate limit exceeded");
-      } else if (resp.status === 403) {
-        console.error("[Company News] API access forbidden - check subscription");
-      } else {
-        console.error(`[Company News] API error: ${resp.status} ${resp.statusText}`);
-      }
-      return null;
-    }
-
-    const data = await resp.json();
-    console.log(`[Company News] Found ${data?.articles?.length || 0} articles`);
-
-    if (data.error) {
-      console.error("[Company News] API returned error:", data.error);
-      return null;
-    }
-
-    const topArticle = data?.articles?.[0];
-    if (!topArticle) {
-      console.log("[Company News] No articles found for company");
-      return null;
-    }
-
-    const title = topArticle.title || "";
-    const source = topArticle.source?.name || "";
-    const result = title ? `Recent: ${title}${source ? ` — ${source}` : ''}` : null;
-    
-    console.log(`[Company News] Successfully retrieved: ${result ? 'Yes' : 'No'}`);
-    return result;
-
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      console.warn("[Company News] Request timeout after 8 seconds");
-    } else {
-      console.warn("[Company News] Error:", err.message);
-    }
-    return null;
-  }
-}
+// News fetching removed: deterministic, resume-only email generation
 
 
 // Parse JSON block from model output safely
@@ -576,7 +600,7 @@ app.get('/health', (_req, res) => {
 // POST route to find decision makers (unified with email finder)
 app.post('/find-decision-makers', authMiddleware, async (req, res) => {
   // Extract and validate fields from req.body
-  const { company, location, role, seniority, maxResults } = req.body;
+  const { company, location, role, seniority, maxResults, domain } = req.body;
   
   // Validation
   if (!company || company.trim() === '') {
@@ -585,31 +609,54 @@ app.post('/find-decision-makers', authMiddleware, async (req, res) => {
       error: 'Company name is required' 
     });
   }
+
+  // Domain policy: immutable if provided; otherwise require confirmed domain
+  const confirmed = confirmedDomains.get(req.user?.id)?.domain || null;
+  if (domain && !isValidCompanyDomain(domain)) {
+    return res.status(400).json({ success: false, error: 'Please enter a valid company domain (e.g., microsoft.com)' });
+  }
+  if (confirmed && domain && confirmed !== String(domain).trim().toLowerCase()) {
+    return res.status(409).json({ success: false, error: 'Cross-domain mix detected. Use the confirmed domain or update it explicitly.' });
+  }
+  const finalDomain = (domain ? String(domain).trim().toLowerCase() : confirmed);
+  if (!finalDomain) {
+    return res.status(400).json({ success: false, error: 'Domain not confirmed. Please select a domain before continuing.', requires_domain_confirmation: true });
+  }
   
   // Set defaults
   const searchLocation = location || 'India';
-  const searchRole = role || 'recruiter'; // Default to recruiter for decision makers
+  // Strict role enum normalization
+  const normalizeRole = (r) => {
+    const v = String(r || '').toLowerCase();
+    if (v.includes('recruit') || v === 'hr' || v.includes('human resources')) return 'hiring';
+    if (v.includes('hiring')) return 'hiring';
+    // Technical detection
+    if (v.includes('engineer') || v.includes('developer') || v.includes('software') || v.includes('dev') || v.includes('tech')) return 'engineering';
+    if (v.includes('general')) return 'general';
+    return 'general';
+  };
+  const searchRole = normalizeRole(role);
   const limit = maxResults || 10;
   
-  console.log(`[Email Finder] Finding decision makers for: ${company} in ${searchLocation}`);
+  console.log(`[Email Finder] Finding decision makers for: ${company} (${finalDomain}) in ${searchLocation}`);
   
   try {
     // Use hybrid email finder to get company contacts
-    const emailResults = await safeFindEmailsWithHybrid(company, searchRole, {
+    const emailResults = await safeFindEmailsWithHybrid(company, finalDomain, searchRole, {
       maxResults: limit,
       useCache: true,
       verifyEmails: true
     });
     
     // Transform email results to match expected decision makers format
-    const contacts = emailResults.data.contacts.map(email => ({
-      name: email.name,
-      email: email.email,
-      title: email.title,
-      department: email.department,
-      location: searchLocation,
-      linkedin: email.linkedin || null,
-      seniority: email.confidence > 0.8 ? 'senior' : 'manager'
+    const contacts = emailResults.data.contacts.map(entry => ({
+      email: entry.email,
+      type: entry.type,
+      confidenceLevel: entry.confidenceLevel,
+      confidenceReason: entry.confidenceReason,
+      name: entry.name,
+      title: entry.title,
+      location: searchLocation
     }));
     
     console.log(`[Email Finder] Found ${contacts.length} contacts using hybrid approach`);
@@ -627,7 +674,8 @@ app.post('/find-decision-makers', authMiddleware, async (req, res) => {
         company: company,
         location: searchLocation,
         role: searchRole,
-        seniority: ['manager', 'director', 'vp', 'senior'] // Default seniority levels
+        domain: finalDomain,
+        // Removed seniority claims to avoid implying decision-maker status
       }
     });
     
@@ -655,19 +703,41 @@ app.post('/find-emails', authMiddleware, async (req, res) => {
     });
   }
 
+  // Domain policy: immutable if provided; otherwise require confirmed domain
+  const confirmed = confirmedDomains.get(req.user?.id)?.domain || null;
+  if (domain && !isValidCompanyDomain(domain)) {
+    return res.status(400).json({ success: false, error: 'Please enter a valid company domain (e.g., microsoft.com)' });
+  }
+  if (confirmed && domain && confirmed !== String(domain).trim().toLowerCase()) {
+    return res.status(409).json({ success: false, error: 'Cross-domain mix detected. Use the confirmed domain or update it explicitly.' });
+  }
+  const finalDomain = (domain ? String(domain).trim().toLowerCase() : confirmed);
+  if (!finalDomain) {
+    return res.status(400).json({ success: false, error: 'Domain not confirmed. Please select a domain before continuing.', requires_domain_confirmation: true });
+  }
+
   // Ensure role is properly converted to string to prevent [object Object] logs
   let searchRole = role || 'recruiter';
   if (typeof searchRole === 'object' && searchRole !== null) {
     searchRole = Object.values(searchRole).join(' ');
   }
-  searchRole = String(searchRole).trim();
+  // Strict role enum normalization
+  const normalizeRole = (r) => {
+    const v = String(r || '').toLowerCase();
+    if (v.includes('recruit') || v === 'hr' || v.includes('human resources')) return 'hiring';
+    if (v.includes('hiring')) return 'hiring';
+    if (v.includes('engineer') || v.includes('developer') || v.includes('software') || v.includes('dev') || v.includes('tech')) return 'engineering';
+    if (v.includes('general')) return 'general';
+    return 'general';
+  };
+  searchRole = normalizeRole(searchRole);
 
   const limit = maxResults || 10;
   
-  console.log(`[POST /find-emails] Searching for role="${searchRole}" at company="${company}"`);
+  console.log(`[POST /find-emails] Searching for role="${searchRole}" at company="${company}" domain="${finalDomain}"`);
   
   try {
-    const results = await safeFindEmailsWithHybrid(company, domain, searchRole, {
+    const results = await safeFindEmailsWithHybrid(company, finalDomain, searchRole, {
       maxResults: limit,
       useCache: true,
       verifyEmails: true,
@@ -679,16 +749,23 @@ app.post('/find-emails', authMiddleware, async (req, res) => {
     
     return res.json({
       success: true,
-      data: results.data,
+      data: {
+        contacts: results.data.contacts.map(e => ({
+          email: e.email,
+          type: e.type,
+          confidenceLevel: e.confidenceLevel,
+          confidenceReason: e.confidenceReason,
+          name: e.name,
+          title: e.title
+        }))
+      },
       meta: {
         company: company,
-        domain: domain,
+        domain: finalDomain,
         role: searchRole,
         location: location,
         sources: results.sources,
-        cached: results.cached,
-        verified_count: results.verified_count,
-        discovery_attempts: results.discovery_attempts
+        cached: results.cached
       }
     });
     
@@ -753,6 +830,11 @@ function buildFallbackEmail({ role, company, location, comments, resumeBulletsAr
 app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) => {
   try {
     const { role, company, location, tone, purpose: rawPurpose } = req.body || {};
+    // Require confirmed domain before any generation
+    const confirmed = confirmedDomains.get(req.user?.id)?.domain || null;
+    if (!confirmed) {
+      return res.status(400).json({ error: "Domain not confirmed. Please select and confirm a domain before generating email.", requires_domain_confirmation: true });
+    }
     const purpose = (rawPurpose && String(rawPurpose).trim()) || "job";
     // Normalize extra comments: accept either 'comments' or 'extraComments' from the client
     const rawComments = (req.body && (req.body.comments ?? req.body.extraComments)) ?? "";
@@ -762,7 +844,7 @@ app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) 
         ? rawComments.join(" ")
         : String(rawComments || "")
     ).trim();
-    console.log("[DEBUG] Received data:", { role, company, location, tone, comments, purpose });
+    console.log("[DEBUG] Received data:", { role, company, location, tone, comments, purpose, domain: confirmed });
 
     // Be lenient: require only role and company to avoid unnecessary 400s
     if (!role || !company) {
@@ -806,8 +888,8 @@ app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) 
       topSkills = extractTopSkillsHeuristic(resumeText || "");
     }
 
-    // News
-    const companyNews = await fetchCompanyNews(company);
+    // News disabled
+    const companyNews = null;
 
     // Summarize resume into bullets array
     let resumeSnippet = "";
@@ -846,151 +928,125 @@ app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) 
         }
       }
 
-      // Validate company news: only include if it mentions the company name (case-insensitive)
-      let newsLine = '';
-      if (companyNews && company) {
-        const newsLower = String(companyNews).toLowerCase();
-        const compLower = String(company).toLowerCase();
-        if (newsLower.includes(compLower)) {
-          newsLine = companyNews;
-        } else {
-          console.log('[DEBUG] Ignored irrelevant news for company:', company, 'news:', companyNews);
-        }
-      }
+      // News line removed
 
 
-    // Build prompts
-    const emailUserPrompt = `
-Generate a JSON ONLY (no commentary, no markdown) with the following structure:
-{
-  "emailBody": string,
-  "subjectSuggestions": string[],
-  "newsSummary": string[]
-}
+    // Deterministic resume-derived fields
+    const skills = Array.isArray(topSkills) ? topSkills.slice(0, 4) : [];
+    const roleIntent = String(role || '').trim();
+    const inferExperienceLevel = (text, r) => {
+      const t = String(text || '').toLowerCase();
+      const rr = String(r || '').toLowerCase();
+      if (rr.includes('intern') || t.includes('intern')) return 'intern';
+      if (t.includes('undergrad') || t.includes('undergraduate') || t.includes('student') || t.includes('b.tech') || t.includes('btech') || t.includes('bachelor')) return 'undergraduate';
+      return '';
+    };
+    const experienceLevel = inferExperienceLevel(resumeText || '', roleIntent);
 
-### CONTEXT:
-You are generating a short, personalized cold email for outreach.
-Use the following structured input:
+    const skillsLineDet = skills.length ? skills.join(', ') : 'N/A';
+    const experiencePhrase = experienceLevel ? `I am an ${experienceLevel}. ` : '';
+    const teamTemplate = () => {
+      return `Hi ${company} Hiring Team,\n\nI am interested in the ${roleIntent} role. ${experiencePhrase}My core skills include ${skillsLineDet}.\n\n[Optional: add 1 line about a relevant project or past experience]\n\nI have attached my resume for your consideration. Please let me know if any additional information is needed.\n\nBest,\nShravya Azmani`;
+    };
+    const emailBody = teamTemplate();
+    const subjectSuggestions = [
+      `Application for ${roleIntent}`,
+      `${roleIntent} — Resume Attached`,
+      `Consideration for ${roleIntent}`
+    ];
 
-- Role: ${role}
-- Company: ${company}
-- Location: ${location || 'N/A'}
-- Tone: ${tone || 'Friendly'}
-- Purpose: ${purpose}
-- Resume Summary / Highlights: ${resumeBulletsArray && resumeBulletsArray.length ? resumeBulletsArray.slice(0, 5).join(' | ') : resumeSummary}
-- Key skills: ${skillsLine}
-- Comments: ${comments || 'N/A'}
-- Company news fetched from external API:
-${newsLine || 'No recent company updates found.'}
-
-### WRITING INSTRUCTIONS:
-1. Keep the total email under 150 words.
-2. Tone: ${tone || 'Friendly'}, human, concise, and professional.
-3. Structure:
-   - Greeting: "Hi [Company] team,"
-   - Company Hook: Begin with "I recently noticed [company news headline] …" if recent news exists.
-   - Value Proposition: Connect your experience and skills to the company's domain or recent initiatives.
-   - **IMPORTANT**: If Comments are provided above (not 'N/A'), you MUST naturally incorporate them into the email. For example, if comments mention "one year work experience", weave it into the value proposition like "With one year of work experience in [relevant field]" or "Having gained one year of hands-on experience in...". Make it flow naturally.
-   - CTA: End with a short, polite ask (e.g., "Would you be open to a quick chat?")
-   - Signature: "Best, Shravya Azmani"
-4. Avoid generic phrases like “I’m passionate about…” or “I believe I can contribute…”.
-5. Keep paragraphs short (2–3 lines max).
-6. Generate 5 subject lines:
-   - First 2 creative / conversational
-   - Next 3 formal / polite
-7. ALSO generate a field “newsSummary”:
-   - If company news exists, extract up to 3 short one-line summaries (10–15 words max each)
-   - Example: “Rapido expands bike taxi service to Delhi NCR — Economic Times”. after writing the news line, mention this snippet [you can mention any latest news relevant to your email]
-   - If no news, return an empty array.
-
-### OUTPUT EXAMPLE:
-{
-  "emailBody": "Hi Rapido team,\\n\\nI recently noticed Rapido expanded its bike taxi service to Delhi NCR — really exciting! With one year of work experience in product development, I've built a gamified finance education app that boosted engagement by 40%. I'd love to bring that same analytical mindset and hands-on experience to your product team.\\n\\nWould you be open to a quick chat?\\n\\nBest,\\nShravya Azmani",
-  "subjectSuggestions": [
-    "Bringing Product Thinking to Rapido",
-    "Exploring Data-Driven Design at Rapido",
-    "Not from IIT, but can solve problems for Rapido",
-    "Exploring Collaboration with Rapido",
-    "Interested in Contributing to Rapido’s Product Vision"
-  ],
-  "newsSummary": [
-    "Rapido expands bike taxi service to Delhi NCR — Economic Times",
-    "Rapido partners with Metro for last-mile logistics — Hindustan Times"
-  ]
-}
-`;
-
-
-
-    console.log("[Groq] Email Prompt:", emailUserPrompt.slice(0, 240) + "...");
-    console.log("[DEBUG] resumeBulletsArray:", resumeBulletsArray);
-    console.log("[DEBUG] skillsLine:", skillsLine);
-
-    let emailBody = "";
-    let subjectSuggestions = [];
-    try {
-      const completion = await safeGroqRequest(groq, {
-        model: MODEL_EMAIL,
-        messages: [
-          { role: "system", content: emailSystemPrompt },
-          { role: "user", content: emailUserPrompt }
-        ],
-        temperature: 0.4,
-        max_tokens: 500,
-      }, "mixtral-8x7b");
-      const content = completion.choices?.[0]?.message?.content || "";
-      const parsed = parseJsonFromModel(content);
-      if (parsed && typeof parsed === 'object') {
-        emailBody = String(parsed.emailBody || '').trim();
-        subjectSuggestions = Array.isArray(parsed.subjectSuggestions) ? parsed.subjectSuggestions.map(s => String(s)).slice(0, 5) : [];
-      } else {
-        throw new Error('Model did not return valid JSON');
-      }
-    } catch (apiError) {
-      console.error("[Groq Email Gen Error]", apiError?.message || apiError);
-      // Fallbacks
-      emailBody = buildFallbackEmail({ role, company, location, comments, resumeBulletsArray, resumeSnippet });
-      const creative = [
-        `Not from IIT, but can ship for ${company}`,
-        `A quick idea ${company} might like`
-      ];
-      const formal = [
-        `Interest in ${purpose} at ${company}`,
-        `Exploring ${role} opportunity at ${company}`,
-        `Quick note regarding ${purpose} at ${company}`
-      ];
-      subjectSuggestions = [...creative, ...formal].slice(0, 5);
-    }
-
-  return res.json({ emailBody, subjectSuggestions, newsSummary: companyNews ? [companyNews] : [] });
+    return res.json({ emailBody, subjectSuggestions, newsSummary: [] });
   } catch (err) {
     console.error("Error in /generate-email:", err && (err.stack || err.message || err));
     // Return a graceful fallback instead of 500 to keep frontend happy
     try {
       const { role, company, location, comments, purpose } = req.body || {};
-      const emailBody = buildFallbackEmail({
-        role: role || 'Opportunity',
-        company: company || 'your company',
-        location: location || '',
-        comments: comments || '',
-        resumeBulletsArray: [],
-        resumeSnippet: ''
-      });
-      const creative = [
-        `Not from IIT, but can ship for ${company || 'your team'}`,
-        `A quick idea ${company || 'your team'} might like`
+      const roleIntent = String(role || 'Opportunity').trim();
+      const skillsLineDet = 'N/A';
+      const emailBody = `Hi ${company || 'Hiring Team'},\n\nI am interested in the ${roleIntent} role. My core skills include ${skillsLineDet}.\n\nI have attached my resume for your consideration. Please let me know if any additional information is needed.\n\nBest,\nShravya Azmani`;
+      const subjectSuggestions = [
+        `Application for ${roleIntent}`,
+        `${roleIntent} — Resume Attached`,
+        `Consideration for ${roleIntent}`
       ];
-      const formal = [
-        `Interest in ${purpose || 'an opportunity'} at ${company || 'your company'}`,
-        `Exploring ${role || 'a role'} opportunity at ${company || 'your company'}`,
-        `Quick note regarding ${purpose || 'an opportunity'} at ${company || 'your company'}`
-      ];
-  const subjectSuggestions = [...creative, ...formal].slice(0, 5);
-  return res.status(200).json({ emailBody, subjectSuggestions, newsSummary: [] });
+      return res.status(200).json({ emailBody, subjectSuggestions, newsSummary: [] });
     } catch (fallbackErr) {
       console.error('[Fallback Build Error]', fallbackErr);
       return res.status(500).json({ error: 'Internal server error' });
     }
+  }
+});
+
+// Suggest a single optional experience line from resume (verbatim selection)
+app.post('/experience-suggestion', authMiddleware, conditionalUpload, async (req, res) => {
+  try {
+    // Extract resume text if provided
+    const resumeText = await extractResumeText(req.file);
+    const text = String(resumeText || '').trim();
+    if (!text) {
+      return res.json({ suggestion: '' });
+    }
+
+    // Prefer deterministic local extraction to avoid rewriting
+    const sentences = text
+      .split(/(?<=[.!?])\s+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const bannedBuzz = [
+      'passionate', 'synergy', 'dynamic', 'impact', 'leverage', 'disrupt', 'innovative', 'revolution', 'world-class', 'cutting-edge', 'groundbreaking', 'visionary'
+    ];
+
+    const isGeneric = (s) => {
+      const lower = s.toLowerCase();
+      if (/\d/.test(lower)) return false; // no numbers/metrics/dates
+      if (bannedBuzz.some(b => lower.includes(b))) return false;
+      // avoid outcomes claims
+      if (/(increased|reduced|boosted|improved|impact|resulted|grew|decreased)/i.test(lower)) return false;
+      // length bounds
+      const len = s.length;
+      return len >= 40 && len <= 180;
+    };
+
+    let picked = sentences.find(isGeneric) || '';
+
+    // If nothing suitable found locally, ask Groq to SELECT verbatim line (no rewrite)
+    if (!picked && process.env.GROQ_API_KEY) {
+      try {
+        const systemPrompt = 'Select a single, verbatim sentence from the resume. Do not rewrite.';
+        const userPrompt = `From the resume text below, choose ONE existing sentence verbatim that describes a relevant project or past experience.\nRules:\n- 1 sentence only, verbatim from resume (no paraphrase)\n- No metrics/numbers/dates\n- No impact/outcome claims\n- No buzzwords (synergy, disruptive, innovative, passionate, etc.)\n- If no suitable sentence exists, return an empty string.\n\nReturn JSON only: {"suggestion": string}.\n\nResume:\n${text}`;
+        const completion = await safeGroqRequest(groq, {
+          model: MODEL_GENERAL,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0,
+          max_tokens: 120,
+        });
+        const content = completion.choices?.[0]?.message?.content || '';
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(content);
+        if (parsed && typeof parsed.suggestion === 'string') {
+          picked = parsed.suggestion.trim();
+        }
+      } catch (err) {
+        console.warn('[Experience Suggestion] Groq selection failed:', err?.message || err);
+      }
+    }
+
+    // Ensure constraints again server-side
+    if (picked) {
+      if (/\d/.test(picked)) picked = '';
+      const lower = picked.toLowerCase();
+      if (/(increased|reduced|boosted|improved|impact|resulted|grew|decreased)/.test(lower)) picked = '';
+      if (bannedBuzz.some(b => lower.includes(b))) picked = '';
+    }
+
+    return res.json({ suggestion: picked || '' });
+  } catch (err) {
+    console.error('[Experience Suggestion] Error:', err?.message || err);
+    return res.json({ suggestion: '' });
   }
 });
 

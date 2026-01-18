@@ -17,7 +17,7 @@ async function testImprovedFinder() {
   
   console.log('Hiring emails:');
   hiringEmails.forEach((email, i) => {
-    console.log(`${i+1}. ${email.email} (confidence: ${email.confidence})`);
+    console.log(`${i+1}. ${email.email} (${email.type || 'role-based'}) [${email.confidenceLevel}]`);
   });
   
   // Test 2: Partnership role  
@@ -30,7 +30,7 @@ async function testImprovedFinder() {
   
   console.log('Partnership emails:');
   partnershipEmails.forEach((email, i) => {
-    console.log(`${i+1}. ${email.email} (confidence: ${email.confidence})`);
+    console.log(`${i+1}. ${email.email} (${email.type || 'role-based'}) [${email.confidenceLevel}]`);
   });
   
   // Test 3: General (no role)
@@ -43,7 +43,7 @@ async function testImprovedFinder() {
   
   console.log('General emails:');
   generalEmails.forEach((email, i) => {
-    console.log(`${i+1}. ${email.email} (confidence: ${email.confidence})`);
+    console.log(`${i+1}. ${email.email} (${email.type || 'role-based'}) [${email.confidenceLevel}]`);
   });
 }
 

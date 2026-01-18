@@ -3,6 +3,79 @@ import supabase from '../supabaseClient.js';
 
 const router = express.Router();
 
+// GET /api/analytics - Dashboard summary expected by frontend
+// Returns shape: { success: true, data: { total_sent, total_replied, total_bounced, reply_rate, most_popular_tone, top_purpose, recent_emails } }
+router.get('/', async (_req, res) => {
+  try {
+    const { data: allEmails, error: fetchError } = await supabase
+      .from('emails')
+      .select('id, status, company, purpose, tone, created_at')
+      .order('created_at', { ascending: false });
+
+    if (fetchError) {
+      console.error('[Analytics] Fetch error:', fetchError);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch email analytics',
+        details: fetchError.message
+      });
+    }
+
+    const rows = Array.isArray(allEmails) ? allEmails : [];
+
+    const totalSent = rows.length;
+    const totalReplied = rows.filter(email => String(email.status).toLowerCase() === 'replied').length;
+    const totalBounced = rows.filter(email => String(email.status).toLowerCase() === 'bounced').length;
+    const replyRate = totalSent > 0 ? (totalReplied / totalSent) : 0;
+
+    // Most popular tone
+    const toneCounts = {};
+    for (const email of rows) {
+      const t = email.tone || 'unknown';
+      toneCounts[t] = (toneCounts[t] || 0) + 1;
+    }
+    const mostPopularTone = Object.keys(toneCounts).length
+      ? Object.keys(toneCounts).sort((a, b) => toneCounts[b] - toneCounts[a])[0]
+      : 'N/A';
+
+    // Top purpose
+    const purposeCounts = {};
+    for (const email of rows) {
+      const p = email.purpose || 'unknown';
+      purposeCounts[p] = (purposeCounts[p] || 0) + 1;
+    }
+    const topPurpose = Object.keys(purposeCounts).length
+      ? Object.keys(purposeCounts).sort((a, b) => purposeCounts[b] - purposeCounts[a])[0]
+      : 'N/A';
+
+    // Recent emails (last 10)
+    const recentEmails = rows.slice(0, 10).map(email => ({
+      id: email.id,
+      company: email.company,
+      purpose: email.purpose,
+      tone: email.tone,
+      status: email.status,
+      created_at: email.created_at
+    }));
+
+    return res.json({
+      success: true,
+      data: {
+        total_sent: totalSent,
+        total_replied: totalReplied,
+        total_bounced: totalBounced,
+        reply_rate: Math.round(replyRate * 100), // percentage integer
+        most_popular_tone: mostPopularTone,
+        top_purpose: topPurpose,
+        recent_emails: recentEmails
+      }
+    });
+  } catch (error) {
+    console.error('[Analytics] Get / error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // POST /api/analytics/log
 // body: { event_type, tone, purpose, company, result }
 router.post('/log', async (req, res) => {

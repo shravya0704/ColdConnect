@@ -28,19 +28,14 @@ async function testRealDomain() {
     console.log('\n✅ Results:');
     console.log(`- Found: ${results.count} contacts`);
     console.log(`- Sources: ${results.sources.join(', ')}`);
-    console.log(`- Verified: ${results.verified_count}`);
+    // Verification counts removed in ethical mode
     
-    if (results.discovery_attempts) {
-      console.log('\n📋 Discovery log:');
-      results.discovery_attempts.forEach((attempt, i) => {
-        console.log(`  ${i + 1}. ${attempt}`);
-      });
-    }
+    // Discovery log removed; only sources are reported
     
     if (results.data.contacts.length > 0) {
       console.log('\n📧 Sample contacts:');
       results.data.contacts.slice(0, 3).forEach((contact, i) => {
-        console.log(`  ${i + 1}. ${contact.email} (${contact.source}, confidence: ${contact.confidence})`);
+        console.log(`  ${i + 1}. ${contact.email} (${contact.source}, confidence: ${contact.confidenceLevel})`);
         if (contact.name !== 'Unknown') {
           console.log(`      Name: ${contact.name}`);
         }
