@@ -54,17 +54,14 @@ async function testImprovedEmailGeneration() {
     const domainCorrect = emails.every(email => email.email.includes(`@${testCase.expectedDomain}`));
     console.log(`   ✅ Domain Correct: ${domainCorrect ? 'YES' : 'NO'}`);
     
-    // Show mix of functional and personal emails
-    const functionalEmails = emails.filter(e => e.pattern !== 'personal');
-    const personalEmails = emails.filter(e => e.pattern === 'personal');
-    
-    console.log(`   📋 Functional emails: ${functionalEmails.length}`);
-    console.log(`   👤 Personal emails: ${personalEmails.length}`);
+    // Ethical mode: only role-based functional inboxes are generated here
+    const roleBased = emails.filter(e => e.type === 'role-based');
+    console.log(`   📋 Role-based inboxes: ${roleBased.length}`);
     
     // Display sample emails
     console.log(`   📬 Sample emails:`);
     emails.slice(0, 4).forEach((email, index) => {
-      console.log(`      ${index + 1}. ${email.name} <${email.email}> (${email.pattern === 'personal' ? 'personal' : 'functional'})`);
+      console.log(`      ${index + 1}. ${email.email} (${email.type || 'role-based'})`);
     });
     
     console.log('');
@@ -73,29 +70,27 @@ async function testImprovedEmailGeneration() {
   // Test email pattern generation specifically
   console.log('🎯 Email Pattern Validation:');
   
-  const microsoftEmails = await findCompanyContacts('Microsoft', 'software engineer', {
+  const microsoftEmails = await findCompanyContacts('Microsoft', 'recruiter', {
     maxResults: 6
   });
   
   console.log('   Microsoft Software Engineer emails:');
   microsoftEmails.forEach((email, index) => {
-    const isPersonal = email.pattern === 'personal';
     const isCorrectDomain = email.email.includes('@microsoft.com');
     const hasProperFormat = /^[a-z0-9.]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email.email);
     
     console.log(`   ${index + 1}. ${email.email}`);
-    console.log(`      ✅ Type: ${isPersonal ? 'Personal' : 'Functional'}`);
+    console.log(`      ✅ Type: ${email.type || 'role-based'}`);
     console.log(`      ✅ Domain: ${isCorrectDomain ? 'Correct' : 'Wrong'}`);
     console.log(`      ✅ Format: ${hasProperFormat ? 'Valid' : 'Invalid'}`);
-    console.log(`      ✅ Confidence: ${email.confidence}`);
+    console.log(`      ✅ Confidence: ${email.confidenceLevel} (${email.confidenceReason})`);
   });
   
   console.log('\n🚀 Email Generation Features Validated:');
   console.log('✅ Company-specific domains used correctly');
   console.log('✅ Fallback domains work for unknown companies'); 
-  console.log('✅ Mix of functional (hr@, careers@) and personal emails');
-  console.log('✅ Realistic names from fallback list');
-  console.log('✅ Proper email patterns (firstname.lastname, firstinitiallastname)');
+  console.log('✅ Deterministic role-based inboxes (hr@, careers@, etc.)');
+  console.log('✅ Person-based patterns only when real names exist (via company site)');
   console.log('✅ Sanitized inputs (no spaces/dots in email addresses)');
   console.log('✅ Confidence scoring based on email type');
   

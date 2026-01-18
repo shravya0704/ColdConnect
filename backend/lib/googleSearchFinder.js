@@ -5,6 +5,9 @@
 
 import fetch from 'node-fetch';
 
+// Ethical constraint: Do NOT scrape LinkedIn. We restrict to public
+// company pages like About/Team/Careers only.
+
 /**
  * Search for people at a company using Google Custom Search
  * @param {Object} params - Search parameters
@@ -50,6 +53,7 @@ export async function searchPeople({ company, domain, role = '', location = '', 
     return [];
   }
 
+  // We require a domain to stay scoped to the company site.
   if (!company || !domain) {
     console.log('[Google Search] Missing company or domain, skipping search');
     return [];
@@ -128,19 +132,18 @@ export async function searchPeople({ company, domain, role = '', location = '', 
 function buildSearchQueries({ company, domain, role, location }) {
   const queries = [];
   
-  // Base search terms
+  // Base search terms limited to the company's own website only
   const baseTerms = [
-    `site:linkedin.com/in ${company}`,
     `site:${domain} "team" OR "staff" OR "about"`,
-    `"${company}" ${role || 'manager'} ${location || ''}`,
+    `site:${domain} "careers" OR "our team"`,
+    `site:${domain} ${role || 'team'} ${location || ''}`,
   ];
   
   // Role-specific searches
   if (role) {
     queries.push(
-      `site:linkedin.com/in "${company}" "${role}"`,
-      `"${company}" "${role}" -jobs -careers`,
-      `site:${domain} "${role}"`
+      `site:${domain} "${role}"`,
+      `site:${domain} "${role}" "team"`,
     );
   }
   
@@ -149,7 +152,7 @@ function buildSearchQueries({ company, domain, role, location }) {
   
   // Location-specific searches
   if (location) {
-    queries.push(`"${company}" "${location}" ${role || 'team'}`);
+    queries.push(`site:${domain} "${location}" ${role || 'team'}`);
   }
   
   return queries.slice(0, 3); // Limit to 3 queries to avoid rate limits
@@ -202,18 +205,14 @@ function extractPersonInfo(item, company, domain) {
     return null;
   }
   
-  // Extract name and title from LinkedIn results
-  if (link.includes('linkedin.com')) {
-    return parseLinkedInResult(title, snippet, link);
-  }
-  
+  // We do NOT parse LinkedIn; only company website results are allowed
   // Extract from company website results
   if (displayLink && displayLink.includes(domain)) {
     return parseCompanyPageResult(title, snippet, link);
   }
   
-  // Extract from general results
-  return parseGeneralResult(title, snippet, link, company);
+  // Otherwise, ignore general web results to avoid third-party scraping
+  return null;
 }
 
 /**
@@ -225,6 +224,7 @@ function isIrrelevantResult(title, snippet, link) {
     /news|press|blog|article/i,
     /product|service|software/i,
     /\d{4}|\d{1,2}\/\d{1,2}/,  // Dates
+    /linkedin\.com/i,            // Explicitly skip LinkedIn
   ];
   
   const content = `${title} ${snippet} ${link}`.toLowerCase();
@@ -234,25 +234,7 @@ function isIrrelevantResult(title, snippet, link) {
 /**
  * Parse LinkedIn search results
  */
-function parseLinkedInResult(title, snippet, link) {
-  // LinkedIn title format: "Name - Title at Company | LinkedIn"
-  const nameMatch = title.match(/^([^-|]+?)(?:\s*-\s*(.+?))?\s*\|\s*LinkedIn$/i);
-  
-  if (nameMatch) {
-    const name = nameMatch[1].trim();
-    const title = nameMatch[2] ? nameMatch[2].trim() : '';
-    
-    return {
-      name,
-      title: cleanTitle(title),
-      link,
-      snippet: snippet || '',
-      source: 'google-linkedin'
-    };
-  }
-  
-  return null;
-}
+// Removed LinkedIn parser by policy
 
 /**
  * Parse company page results
@@ -269,12 +251,15 @@ function parseCompanyPageResult(title, snippet, link) {
   for (const pattern of namePatterns) {
     const match = content.match(pattern);
     if (match) {
+      const candidate = match[1].trim();
+      if (!isPlausiblePersonName(candidate)) continue;
       return {
-        name: match[1].trim(),
+        name: candidate,
         title: match[2] ? cleanTitle(match[2].trim()) : '',
         link,
         snippet: snippet || '',
-        source: 'google-company'
+        source: 'google-company',
+        isPerson: true
       };
     }
   }
@@ -285,24 +270,7 @@ function parseCompanyPageResult(title, snippet, link) {
 /**
  * Parse general search results
  */
-function parseGeneralResult(title, snippet, link, company) {
-  // Look for "Name at Company" patterns
-  const atPattern = new RegExp(`([A-Z][a-z]+\\s+[A-Z][a-z]+)\\s+at\\s+${company}`, 'i');
-  const content = `${title} ${snippet}`;
-  
-  const match = content.match(atPattern);
-  if (match) {
-    return {
-      name: match[1].trim(),
-      title: '',
-      link,
-      snippet: snippet || '',
-      source: 'google-general'
-    };
-  }
-  
-  return null;
-}
+// We no longer parse general results to avoid non-company sources
 
 /**
  * Clean and normalize job titles
@@ -313,6 +281,17 @@ function cleanTitle(title) {
     .replace(/\s*\|\s*.+$/, '')   // Remove "| Company"
     .replace(/^\s*-\s*/, '')      // Remove leading dash
     .trim();
+}
+
+// Strict filter to avoid arbitrary phrases being treated as names
+function isPlausiblePersonName(name) {
+  const n = String(name || '').trim();
+  if (!/^[A-Z][a-z]+\s+[A-Z][a-z]+$/.test(n)) return false;
+  const parts = n.split(/\s+/);
+  const blocklist = new Set([
+    'States','Navy','About','Team','Contact','Support','Help','Sales','Marketing','Privacy','Legal','Security','Compliance','Careers','Jobs'
+  ]);
+  return !parts.some(p => blocklist.has(p));
 }
 
 /**

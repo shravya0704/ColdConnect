@@ -41,7 +41,7 @@ async function testEdgeCases() {
     );
     
     console.log(`✅ Email validation: ${results2.count} contacts`);
-    console.log(`Verified: ${results2.verified_count}`);
+    // Verification counts removed in ethical mode
     
     // Test 3: Empty/null inputs
     console.log('\nTest 3: Edge case inputs...');
@@ -67,7 +67,7 @@ async function testEdgeCases() {
     );
     
     console.log(`✅ Array safety: ${results4.count} contacts`);
-    console.log(`Discovery attempts: ${results4.discovery_attempts?.length || 0}`);
+    // Discovery attempts removed; we now report transparent sources only
     
     console.log('\n🎉 All edge case tests passed!');
     

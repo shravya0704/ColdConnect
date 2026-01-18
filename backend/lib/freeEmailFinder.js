@@ -1,7 +1,11 @@
 /**
- * Free Email Finder - Pattern-based email generation
- * Generates likely email addresses using common corporate patterns
+ * Free Email Finder - Role-based inbox generation only (ethical mode)
+ * Generates common role-based inboxes deterministically, with transparent confidence.
+ * No fake names. No random people. Person-based patterns are handled elsewhere
+ * only when a real name is known.
  */
+
+import { resolveCompanyDomain } from "./utils/domain.js";
 
 // Role-based keyword mapping for precision targeting
 const ROLE_KEYWORDS = {
@@ -12,33 +16,14 @@ const ROLE_KEYWORDS = {
   marketing: ["marketing", "growth", "brand"]
 };
 
-// Common email patterns used by companies
-const EMAIL_PATTERNS = {
-  recruiting: [
-    'careers',
-    'jobs',
-    'hiring',
-    'recruitment',
-    'hr',
-    'people',
-    'talent',
-    'join'
-  ],
-  sales: [
-    'sales',
-    'business',
-    'partnerships',
-    'contact',
-    'hello',
-    'info'
-  ],
-  general: [
-    'contact',
-    'info',
-    'hello',
-    'support',
-    'team'
-  ]
+// Deterministic role → inbox mapping as primary feature
+const ROLE_TO_INBOXES = {
+  hr: ['careers', 'recruiting', 'talent', 'hr'],
+  recruiter: ['careers', 'recruiting', 'talent', 'hr'],
+  hiring: ['careers', 'recruiting', 'talent', 'hr'],
+  talent: ['careers', 'recruiting', 'talent', 'hr'],
+  general: ['info', 'contact'],
+  networking: ['info', 'contact']
 };
 
 // Department-specific patterns
@@ -51,70 +36,7 @@ const DEPARTMENT_PATTERNS = {
   general: ['contact', 'info', 'hello', 'team']
 };
 
-// Company domain mapping for accurate email generation
-const domainMap = {
-  google: "google.com",
-  microsoft: "microsoft.com",
-  amazon: "amazon.com",
-  meta: "meta.com",
-  facebook: "meta.com",
-  apple: "apple.com",
-  netflix: "netflix.com",
-  uber: "uber.com",
-  airbnb: "airbnb.com",
-  spotify: "spotify.com",
-  linkedin: "linkedin.com",
-  twitter: "twitter.com",
-  tesla: "tesla.com",
-  salesforce: "salesforce.com",
-  adobe: "adobe.com",
-  oracle: "oracle.com",
-  ibm: "ibm.com",
-  intel: "intel.com",
-  nvidia: "nvidia.com",
-  paypal: "paypal.com",
-  dropbox: "dropbox.com",
-  slack: "slack.com",
-  zoom: "zoom.us",
-  shopify: "shopify.com",
-  stripe: "stripe.com",
-  square: "squareup.com",
-  twilio: "twilio.com",
-  github: "github.com",
-  gitlab: "gitlab.com",
-  atlassian: "atlassian.com",
-  mongodb: "mongodb.com",
-  redis: "redis.com",
-  docker: "docker.com",
-  kubernetes: "kubernetes.io",
-  rapido: "rapido.bike",
-  zomato: "zomato.com",
-  swiggy: "swiggy.com",
-  ola: "olacabs.com",
-  flipkart: "flipkart.com",
-  paytm: "paytm.com",
-  byju: "byjus.com",
-  unacademy: "unacademy.com",
-  zerodha: "zerodha.com",
-  razorpay: "razorpay.com",
-  freshworks: "freshworks.com"
-};
-
-// Fallback HR/recruiter names for realistic email generation
-const fallbackNames = [
-  "Riya Patel",
-  "Amit Sharma", 
-  "John Davis",
-  "Sarah Lee",
-  "Priya Singh",
-  "Rahul Kumar",
-  "Jennifer Smith",
-  "Michael Brown",
-  "Sneha Gupta",
-  "David Wilson",
-  "Anita Roy",
-  "Kevin Chen"
-];
+// Removed fake name fallbacks entirely to comply with ethical constraints
 
 /**
  * Extract domain from company name
@@ -122,18 +44,7 @@ const fallbackNames = [
  * @returns {string} - Likely domain
  */
 function extractDomain(company) {
-  if (!company) return '';
-  
-  // Clean company name - remove only company suffixes, preserve main company name
-  const cleanCompany = company.toLowerCase()
-    .replace(/\s*(inc|ltd|llc|corp|corporation|company|co\.?)\.?\s*$/g, '') // Remove only at the end
-    .replace(/\s+/g, '') // Remove spaces
-    .replace(/[^a-z0-9]/g, ''); // Remove special characters but keep company name intact
-
-  // Use domain mapping if available, otherwise fallback
-  const domain = domainMap[cleanCompany] || `${cleanCompany}.com`;
-  
-  return domain;
+  return resolveCompanyDomain(company);
 }
 
 /**
@@ -152,10 +63,7 @@ function generatePersonalEmailPatterns(name, domain) {
   
   const nameParts = cleanName.split(/\s+/).filter(part => part.length > 0);
   
-  if (nameParts.length < 2) {
-    const singleName = nameParts[0] || 'contact';
-    return [`${singleName}@${domain}`];
-  }
+  if (nameParts.length < 2) return [];
   
   const firstName = nameParts[0];
   const lastName = nameParts[nameParts.length - 1];
@@ -166,7 +74,7 @@ function generatePersonalEmailPatterns(name, domain) {
     `${firstName}.${lastName}@${domain}`,
     `${firstName}${lastName}@${domain}`,
     `${firstInitial}${lastName}@${domain}`,
-    `${firstName}@${domain}`
+    // We include only multi-part patterns here; single-name@domain is too generic
   ];
 }
 
@@ -181,47 +89,30 @@ export async function findCompanyContacts(company, role = 'recruiter', options =
   const {
     maxResults = 10,
     includeGeneral = true,
-    includeDepartment = true
+    includeDepartment = true,
+    domain: domainOverride
   } = options;
 
   if (!company) {
     return [];
   }
 
-  const domain = extractDomain(company);
+  const domain = (domainOverride && String(domainOverride).toLowerCase()) || extractDomain(company);
   const emails = [];
   const seenEmails = new Set();
 
-  // Get role-specific functional patterns
+  // Determine role-based inboxes deterministically
   let functionalPatterns = [];
-  
-  // Check if role matches ROLE_KEYWORDS categories
-  if (role && ROLE_KEYWORDS[role]) {
-    // Use patterns from the role keyword mapping
-    functionalPatterns = [...ROLE_KEYWORDS[role]];
-  } else if (role === 'recruiter' || role === 'hr') {
-    functionalPatterns = [...EMAIL_PATTERNS.recruiting];
-  } else if (role === 'sales') {
-    functionalPatterns = [...EMAIL_PATTERNS.sales];
-  } else if (DEPARTMENT_PATTERNS[role]) {
-    functionalPatterns = [...DEPARTMENT_PATTERNS[role]];
+  const normalizedRole = String(role || '').toLowerCase();
+  if (ROLE_TO_INBOXES[normalizedRole]) {
+    functionalPatterns = [...ROLE_TO_INBOXES[normalizedRole]];
+  } else {
+    if (includeGeneral) functionalPatterns = [...ROLE_TO_INBOXES.general];
   }
-
-  // Add general patterns if requested or if no specific patterns found
-  if (includeGeneral || functionalPatterns.length === 0) {
-    functionalPatterns = [...functionalPatterns, ...EMAIL_PATTERNS.general];
-  }
-
-  // Add department-specific patterns
-  if (includeDepartment && DEPARTMENT_PATTERNS[role]) {
-    functionalPatterns = [...functionalPatterns, ...DEPARTMENT_PATTERNS[role]];
-  }
-
-  // Remove duplicates and limit functional patterns
-  functionalPatterns = [...new Set(functionalPatterns)].slice(0, Math.floor(maxResults * 0.6));
+  functionalPatterns = [...new Set(functionalPatterns)].slice(0, Math.max(2, Math.floor(maxResults)));
 
   // Generate functional email objects
-  functionalPatterns.forEach((pattern, index) => {
+  functionalPatterns.forEach((pattern) => {
     const email = `${pattern}@${domain}`;
     
     if (!seenEmails.has(email)) {
@@ -229,50 +120,19 @@ export async function findCompanyContacts(company, role = 'recruiter', options =
       
       emails.push({
         email,
-        name: `${company} ${pattern.charAt(0).toUpperCase() + pattern.slice(1)} Team`,
-        title: getPatternTitle(pattern, role),
-        department: getDepartmentFromPattern(pattern),
-        source: 'pattern-generation',
-        confidence: getPatternConfidence(pattern, role),
-        verified: false,
+        type: 'Role-based',
+        confidenceLevel: 'Medium',
+        confidenceReason: 'Common role-based inbox; not explicitly published',
+        source: 'role-mapping',
         pattern: pattern
       });
     }
   });
 
-  // Generate personal email patterns using fallback names
-  const remainingSlots = maxResults - emails.length;
-  if (remainingSlots > 0) {
-    // Shuffle fallback names for randomness
-    const shuffledNames = [...fallbackNames].sort(() => Math.random() - 0.5);
-    const namesToUse = shuffledNames.slice(0, Math.ceil(remainingSlots / 3)); // Use fewer names, generate multiple emails per name
-    
-    namesToUse.forEach(name => {
-      const personalEmails = generatePersonalEmailPatterns(name, domain);
-      
-      personalEmails.forEach((email, patternIndex) => {
-        if (emails.length < maxResults && !seenEmails.has(email)) {
-          seenEmails.add(email);
-          
-          emails.push({
-            email,
-            name,
-            title: getRoleBasedTitle(role, name),
-            department: getDepartmentFromRole(role),
-            source: 'pattern-generation',
-            confidence: 0.75 - (patternIndex * 0.05), // Slightly lower confidence, decreasing per pattern
-            verified: false,
-            pattern: 'personal'
-          });
-        }
-      });
-    });
-  }
+  // No personal email generation here. Person-based emails are generated only
+  // when a verified real name is available from a public company page.
 
   console.log(`[Pattern Generator] Generated ${emails.length} emails for ${company} (${role})`);
-  
-  // Sort by confidence descending (highest confidence first)
-  emails.sort((a, b) => b.confidence - a.confidence);
   
   return emails.slice(0, maxResults);
 }
@@ -369,26 +229,6 @@ function getDepartmentFromPattern(pattern) {
  * @param {string} role - The purpose/role (e.g., 'hiring', 'partnership')
  * @returns {number} Confidence score (0.6-0.9)
  */
-function getPatternConfidence(pattern, role) {
-  // Role-based confidence scoring
-  if (role && ROLE_KEYWORDS[role]) {
-    // 90% confidence for exact role match
-    if (ROLE_KEYWORDS[role].includes(pattern)) {
-      return 0.9;
-    }
-  }
-  
-  // Pattern category confidence
-  if (EMAIL_PATTERNS.recruiting.includes(pattern)) {
-    return 0.8; // 80% for recruiting patterns (common and effective)
-  }
-  
-  if (EMAIL_PATTERNS.sales.includes(pattern)) {
-    return 0.7; // 70% for sales patterns (business-focused)
-  }
-  
-  // 60% for general patterns (fallback)
-  return 0.6;
-}
+// Removed numeric scoring in favor of explicit confidence levels per requirement
 
 export default { findCompanyContacts };

@@ -130,7 +130,8 @@ function parsePageContent(html, url) {
   return people.map(person => ({
     ...person,
     link: url,
-    source: 'scrape'
+    source: 'scrape',
+    isPerson: true
   }));
 }
 
