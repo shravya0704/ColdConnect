@@ -28,8 +28,9 @@ export default function Login() {
       setLoading(true);
       setErrorMsg(null);
       setInfoMsg(null);
+      const normalizedEmail = email.trim().toLowerCase();
       const { data, error } = await supabase.auth.signInWithPassword({
-        email,
+        email: normalizedEmail,
         password,
       });
       if (error) throw error;
@@ -52,8 +53,9 @@ export default function Login() {
       setLoading(true);
       setErrorMsg(null);
       setInfoMsg(null);
+      const normalizedEmail = email.trim().toLowerCase();
       const { data, error } = await supabase.auth.signUp({
-        email,
+        email: normalizedEmail,
         password,
       });
       if (error) throw error;
@@ -65,10 +67,11 @@ export default function Login() {
       }
     } catch (error: any) {
       console.error("Error signing up:", error);
-      if (error?.message?.toLowerCase().includes("already registered") || error?.status === 422) {
+      // Only show the "already exists" message for the explicit case
+      if (typeof error?.message === 'string' && error.message.toLowerCase().includes('already registered')) {
         setErrorMsg("An account with this email already exists. Try signing in or reset your password.");
       } else {
-        setErrorMsg(error.message || "Error signing up");
+        setErrorMsg(error?.message || "Error signing up");
       }
       setLoading(false);
     }
@@ -84,7 +87,8 @@ export default function Login() {
         setLoading(false);
         return;
       }
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      const normalizedEmail = email.trim().toLowerCase();
+      const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
         redirectTo: `${window.location.origin}/reset-password`,
       });
       if (error) throw error;

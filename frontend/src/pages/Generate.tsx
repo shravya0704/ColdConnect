@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { supabase } from "../supabaseClient";
+import { API_BASE } from "../apiConfig";
 
 const logEvent = async (event_type: string, data?: any) => {
   try {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
-    await fetch("http://localhost:5000/api/analytics/log", {
+    await fetch(`${API_BASE}/api/analytics/log`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -19,7 +20,7 @@ const logEvent = async (event_type: string, data?: any) => {
 const saveEmailToDatabase = async (emailData: { emailBody: string; company: string; domain: string; purpose: string; tone: string; }) => {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
-  const response = await fetch("http://localhost:5000/api/emails/add", {
+  const response = await fetch(`${API_BASE}/api/emails/add`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -83,7 +84,7 @@ export default function Generate() {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const resp = await fetch('http://localhost:5000/domains/suggest', {
+      const resp = await fetch(`${API_BASE}/domains/suggest`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ company, location })
       });
       const data = await resp.json();
@@ -112,7 +113,7 @@ export default function Generate() {
       if (comments && comments.trim().length > 0) formData.append("comments", comments.trim());
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const response = await fetch("http://localhost:5000/generate-email", { method: "POST", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: formData });
+      const response = await fetch(`${API_BASE}/generate-email`, { method: "POST", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: formData });
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json(); setResult(data); setEditableEmailBody(String(data.emailBody || '')); setShowConfirmButtons(true); logEvent('generate_email', { tone, purpose, company, result: 'success' });
     } catch {
@@ -131,7 +132,7 @@ export default function Generate() {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      await fetch('http://localhost:5000/domains/confirm', {
+      await fetch(`${API_BASE}/domains/confirm`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ domain: nd, replace: true })
       });
     } catch {}
@@ -176,7 +177,7 @@ export default function Generate() {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const response = await fetch("http://localhost:5000/find-decision-makers", {
+      const response = await fetch(`${API_BASE}/find-decision-makers`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ company, domain: chosenDomain, location: location || 'India', role: role || 'any', seniority: ['manager','director','vp','senior'], maxResults: 10 })
@@ -201,7 +202,7 @@ export default function Generate() {
       if (comments && comments.trim().length > 0) formData.append("comments", comments.trim());
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const response = await fetch("http://localhost:5000/generate-email", { method: "POST", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: formData });
+      const response = await fetch(`${API_BASE}/generate-email`, { method: "POST", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: formData });
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json(); setResult(data); setEditableEmailBody(String(data.emailBody || '')); setShowConfirmButtons(true); logEvent('generate_email', { tone, purpose, company, result: 'success' });
     } catch (error) { console.error('Error generating email:', error); alert('Failed to generate email. Please check if the backend is running.'); }
@@ -215,7 +216,7 @@ export default function Generate() {
       if (resume) formData.append('resume', resume);
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const resp = await fetch('http://localhost:5000/experience-suggestion', { method: 'POST', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: formData });
+      const resp = await fetch(`${API_BASE}/experience-suggestion`, { method: 'POST', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: formData });
       const data = await resp.json();
       setExperienceSuggestion(String(data?.suggestion || ''));
     } catch (err) {

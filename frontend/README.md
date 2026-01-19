@@ -67,3 +67,22 @@ export default defineConfig([
   },
 ])
 ```
+
+## API Configuration
+
+The frontend makes API requests to the backend using `VITE_BACKEND_URL` if provided; otherwise, it falls back to a deployed default.
+
+- For local development, set:
+
+```bash
+# frontend/.env
+VITE_BACKEND_URL=http://localhost:5000
+```
+
+- For shared deployments (e.g., Vercel), set `VITE_BACKEND_URL` to your deployed backend URL:
+
+```bash
+VITE_BACKEND_URL=https://your-backend.onrender.com
+```
+
+Ensure your backend CORS settings allow your frontend origin.
