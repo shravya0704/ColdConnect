@@ -5,19 +5,9 @@ import Home from './pages/Home'
 import Generate from './pages/Generate'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
+import ResetPassword from './pages/ResetPassword'
 import Auth from './components/Auth'
 import { supabase } from './supabaseClient'
-
-function ResetPassword() {
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="max-w-md w-full p-6 bg-white rounded shadow">
-        <h1 className="text-xl font-semibold mb-4">Reset Password</h1>
-        <p className="text-sm text-gray-600">To reset your password, follow the instructions sent to your email.</p>
-      </div>
-    </div>
-  )
-}
 
 // Redirects any `type=recovery` URL to the reset-password route and listens for Supabase recovery event
 function RecoveryRedirect() {

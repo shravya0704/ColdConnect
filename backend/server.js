@@ -101,11 +101,16 @@ function conditionalUpload(req, res, next) {
   return next();
 }
 
-const allowedOrigins = [
+const defaultAllowedOrigins = [
   "https://coldconnect-dzpp.vercel.app", // older preview
   "https://cold-connect.vercel.app",     // current production
   "https://coldconnect.vercel.app",      // fallback variant
 ];
+const extraAllowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const allowedOrigins = [...defaultAllowedOrigins, ...extraAllowedOrigins];
 
 app.use(
   cors({
