@@ -835,6 +835,11 @@ function buildFallbackEmail({ role, company, location, comments, resumeBulletsAr
 app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) => {
   try {
     const { role, company, location, tone, purpose: rawPurpose } = req.body || {};
+    // Resolve sender name from explicit input or Supabase user metadata
+    const senderNameRaw = (req.body && req.body.senderName) ||
+      (req.user && (req.user.user_metadata?.full_name || req.user.user_metadata?.name)) ||
+      (req.user && req.user.email ? String(req.user.email).split('@')[0] : '') || '';
+    const senderName = String(senderNameRaw || '').trim().slice(0, 80);
     // Require confirmed domain before any generation
     const confirmed = confirmedDomains.get(req.user?.id)?.domain || null;
     if (!confirmed) {
@@ -951,7 +956,8 @@ app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) 
     const skillsLineDet = skills.length ? skills.join(', ') : 'N/A';
     const experiencePhrase = experienceLevel ? `I am an ${experienceLevel}. ` : '';
     const teamTemplate = () => {
-      return `Hi ${company} Hiring Team,\n\nI am interested in the ${roleIntent} role. ${experiencePhrase}My core skills include ${skillsLineDet}.\n\n[Optional: add 1 line about a relevant project or past experience]\n\nI have attached my resume for your consideration. Please let me know if any additional information is needed.\n\nBest,\nShravya Azmani`;
+      const signName = senderName || 'Regards';
+      return `Hi ${company} Hiring Team,\n\nI am interested in the ${roleIntent} role. ${experiencePhrase}My core skills include ${skillsLineDet}.\n\n[Optional: add 1 line about a relevant project or past experience]\n\nI have attached my resume for your consideration. Please let me know if any additional information is needed.\n\nBest,\n${signName}`;
     };
     const emailBody = teamTemplate();
     const subjectSuggestions = [
@@ -966,9 +972,13 @@ app.post("/generate-email", authMiddleware, conditionalUpload, async (req, res) 
     // Return a graceful fallback instead of 500 to keep frontend happy
     try {
       const { role, company, location, comments, purpose } = req.body || {};
+      const senderNameRaw = (req.body && req.body.senderName) ||
+        (req.user && (req.user.user_metadata?.full_name || req.user.user_metadata?.name)) ||
+        (req.user && req.user.email ? String(req.user.email).split('@')[0] : '') || '';
+      const senderName = String(senderNameRaw || '').trim().slice(0, 80);
       const roleIntent = String(role || 'Opportunity').trim();
       const skillsLineDet = 'N/A';
-      const emailBody = `Hi ${company || 'Hiring Team'},\n\nI am interested in the ${roleIntent} role. My core skills include ${skillsLineDet}.\n\nI have attached my resume for your consideration. Please let me know if any additional information is needed.\n\nBest,\nShravya Azmani`;
+      const emailBody = `Hi ${company || 'Hiring Team'},\n\nI am interested in the ${roleIntent} role. My core skills include ${skillsLineDet}.\n\nI have attached my resume for your consideration. Please let me know if any additional information is needed.\n\nBest,\n${senderName || 'Candidate'}`;
       const subjectSuggestions = [
         `Application for ${roleIntent}`,
         `${roleIntent} — Resume Attached`,
