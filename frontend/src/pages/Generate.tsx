@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { API_BASE } from "../apiConfig";
 
@@ -52,6 +53,7 @@ const getConfidenceBadge = (confidenceLevel: string | number) => {
 };
 
 export default function Generate() {
+  const navigate = useNavigate();
   const [role, setRole] = useState("");
   const [company, setCompany] = useState("");
   const [domain, setDomain] = useState("");
@@ -76,6 +78,22 @@ export default function Generate() {
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [isSavingEmail, setIsSavingEmail] = useState(false);
+  const [senderName, setSenderName] = useState<string>("");
+
+  // Prefill sender name from Supabase user metadata when available
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const metaName = data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || "";
+        const emailName = data.user?.email ? String(data.user.email).split("@")[0] : "";
+        const resolved = (metaName || emailName || "").trim();
+        if (mounted) setSenderName(resolved);
+      } catch {}
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const fetchDomainSuggestions = async () => {
     if (!company) { alert('Please enter a company name first'); return; }
@@ -110,6 +128,7 @@ export default function Generate() {
       const formData = new FormData();
       if (resume) formData.append("resume", resume);
       formData.append("role", role); formData.append("company", company); formData.append("location", location); formData.append("tone", tone); formData.append("purpose", purpose);
+      if (senderName && senderName.trim().length > 0) formData.append("senderName", senderName.trim());
       if (comments && comments.trim().length > 0) formData.append("comments", comments.trim());
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
@@ -199,6 +218,7 @@ export default function Generate() {
       const formData = new FormData();
       if (resume) formData.append("resume", resume);
       formData.append("role", role); formData.append("company", company); formData.append("location", location); formData.append("tone", tone); formData.append("purpose", purpose);
+      if (senderName && senderName.trim().length > 0) formData.append("senderName", senderName.trim());
       if (comments && comments.trim().length > 0) formData.append("comments", comments.trim());
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
@@ -253,7 +273,7 @@ export default function Generate() {
             <div className="flex-1"></div>
             <h1 className="text-4xl font-bold text-gradient flex-1">Generate Your Perfect Email</h1>
             <div className="flex-1 flex justify-end">
-              <button onClick={() => window.location.href = '/dashboard'} className="px-4 py-2 bg-primary-100 text-primary-700 rounded-lg text-sm font-medium hover:bg-primary-200 transition-colors">📊 View Dashboard</button>
+              <Link to="/dashboard" className="px-4 py-2 bg-primary-100 text-primary-700 rounded-lg text-sm font-medium hover:bg-primary-200 transition-colors">📊 View Dashboard</Link>
             </div>
           </div>
           <div className="w-20 h-1 bg-gradient-to-r from-primary-600 to-primary-800 mx-auto rounded-full"></div>
@@ -314,6 +334,12 @@ export default function Generate() {
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">Choose your Location *</label>
             <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200" placeholder="e.g., San Francisco, New York, Remote" required />
+
+            <div className="mt-4">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Your Name</label>
+              <input type="text" value={senderName} onChange={(e) => setSenderName(e.target.value)} className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200" placeholder="How should we sign your email?" />
+              <p className="text-xs text-gray-500 mt-1">Used for the signature line when generating emails.</p>
+            </div>
           </div>
 
           <div>
@@ -395,7 +421,7 @@ export default function Generate() {
               )}
               {emailSaved && (
                 <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                  <div className="flex items-center justify-center gap-2 text-green-700"><span className="text-lg">✅</span><span className="text-sm font-semibold">Email saved to dashboard!</span><button onClick={() => window.location.href = '/dashboard'} className="ml-2 px-3 py-1 bg-green-600 text-white rounded text-xs font-medium hover:bg-green-700 transition-colors">View Dashboard</button></div>
+                  <div className="flex items-center justify-center gap-2 text-green-700"><span className="text-lg">✅</span><span className="text-sm font-semibold">Email saved to dashboard!</span><Link to="/dashboard" className="ml-2 px-3 py-1 bg-green-600 text-white rounded text-xs font-medium hover:bg-green-700 transition-colors">View Dashboard</Link></div>
                 </div>
               )}
               {result.newsSummary && result.newsSummary.length > 0 && (
