@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { API_BASE } from "../apiConfig";
 
@@ -52,8 +52,9 @@ const getConfidenceBadge = (confidenceLevel: string | number) => {
   return { text: 'Low', className: 'bg-gray-100 text-gray-800' };
 };
 
+const STORAGE_KEY = 'coldconnect_generate_state_v1';
+
 export default function Generate() {
-  const navigate = useNavigate();
   const [role, setRole] = useState("");
   const [company, setCompany] = useState("");
   const [domain, setDomain] = useState("");
@@ -79,6 +80,48 @@ export default function Generate() {
   const [toastMessage, setToastMessage] = useState("");
   const [isSavingEmail, setIsSavingEmail] = useState(false);
   const [senderName, setSenderName] = useState<string>("");
+
+  // Hydrate saved progress on first load
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved.role) setRole(saved.role);
+      if (saved.company) setCompany(saved.company);
+      if (saved.domain) setDomain(saved.domain);
+      if (saved.activeDomain) setActiveDomainState(saved.activeDomain);
+      if (saved.location) setLocation(saved.location);
+      if (saved.tone) setTone(saved.tone);
+      if (saved.purpose) setPurpose(saved.purpose);
+      if (typeof saved.comments === 'string') setComments(saved.comments);
+      if (typeof saved.senderName === 'string') setSenderName(saved.senderName);
+      if (typeof saved.editableEmailBody === 'string') setEditableEmailBody(saved.editableEmailBody);
+    } catch (err) {
+      console.warn('[Generate] Failed to parse saved state:', err);
+    }
+  }, []);
+
+  // Persist progress whenever key fields change (exclude resume file for safety)
+  useEffect(() => {
+    try {
+      const payload = {
+        role,
+        company,
+        domain,
+        activeDomain,
+        location,
+        tone,
+        purpose,
+        comments,
+        senderName,
+        editableEmailBody,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    } catch (err) {
+      console.warn('[Generate] Failed to save state:', err);
+    }
+  }, [role, company, domain, activeDomain, location, tone, purpose, comments, senderName, editableEmailBody]);
 
   // Prefill sender name from Supabase user metadata when available
   useEffect(() => {
