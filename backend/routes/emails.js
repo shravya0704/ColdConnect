@@ -1,11 +1,17 @@
 import express from 'express';
 import supabase from '../supabaseClient.js';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
+
+// All email routes require authenticated user
+router.use(authMiddleware);
 
 // POST /api/emails/add - Save a new email record
 router.post('/add', async (req, res) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
     const { emailBody, company, domain, purpose, tone } = req.body;
     
     // Validate required fields
@@ -20,6 +26,7 @@ router.post('/add', async (req, res) => {
     const { data, error } = await supabase
       .from('emails')
       .insert([{
+        user_id: userId,
         email_body: emailBody,
         company,
         domain,
@@ -65,6 +72,8 @@ router.post('/add', async (req, res) => {
 // POST /api/emails/update-status - Update email status
 router.post('/update-status', async (req, res) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
     const { emailId, status } = req.body;
     
     // Validate required fields
@@ -91,6 +100,7 @@ router.post('/update-status', async (req, res) => {
         status
       })
       .eq('id', emailId)
+      .eq('user_id', userId)
       .select()
       .single();
 
@@ -132,10 +142,13 @@ router.post('/update-status', async (req, res) => {
 // GET /api/analytics - Get email analytics
 router.get('/', async (req, res) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
     // Get total counts by status
     const { data: allEmails, error: fetchError } = await supabase
       .from('emails')
       .select('id, status, company, purpose, tone, created_at')
+      .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
     if (fetchError) {

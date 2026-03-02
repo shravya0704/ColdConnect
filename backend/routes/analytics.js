@@ -1,15 +1,23 @@
 import express from 'express';
 import supabase from '../supabaseClient.js';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// All analytics routes require authenticated user
+router.use(authMiddleware);
+
 // GET /api/analytics - Dashboard summary expected by frontend
 // Returns shape: { success: true, data: { total_sent, total_replied, total_bounced, reply_rate, most_popular_tone, top_purpose, recent_emails } }
-router.get('/', async (_req, res) => {
+router.get('/', async (req, res) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
     const { data: allEmails, error: fetchError } = await supabase
       .from('emails')
       .select('id, status, company, purpose, tone, created_at')
+      .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
     if (fetchError) {
@@ -80,10 +88,13 @@ router.get('/', async (_req, res) => {
 // body: { event_type, tone, purpose, company, result }
 router.post('/log', async (req, res) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
     const { event_type, tone, purpose, company, result } = req.body || {};
     if (!event_type) return res.status(400).json({ error: 'event_type is required' });
 
     const payload = {
+      user_id: userId,
       event_type,
       tone: tone || null,
       purpose: purpose || null,
@@ -105,9 +116,12 @@ router.post('/log', async (req, res) => {
 });
 
 // GET /api/analytics/summary
-router.get('/summary', async (_req, res) => {
+router.get('/summary', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('analytics').select('*');
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
+    const { data, error } = await supabase.from('analytics').select('*').eq('user_id', userId);
     if (error) {
       console.error('[Analytics] Select error:', error.message || error);
       return res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
