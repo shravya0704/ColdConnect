@@ -52,6 +52,30 @@ const getConfidenceBadge = (confidenceLevel: string | number) => {
   return { text: 'Low', className: 'bg-gray-100 text-gray-800' };
 };
 
+// Reusable Gmail compose deep link builder
+const openGmailCompose = ({
+  to = '',
+  subject = 'Exciting Opportunity',
+  body = '',
+  authUser,
+}: {
+  to?: string;
+  subject?: string;
+  body?: string;
+  authUser?: string;
+}) => {
+  const base = 'https://mail.google.com/mail/?view=cm&fs=1';
+  const parts = [
+    `to=${encodeURIComponent(to)}`,
+    `su=${encodeURIComponent(subject)}`,
+    `body=${encodeURIComponent(body)}`,
+  ];
+  if (authUser) parts.push(`authuser=${encodeURIComponent(authUser)}`);
+  const url = `${base}&${parts.join('&')}`;
+  window.open(url, "_blank");
+};
+
+// Per-tab persistence: survive refresh, reset on new tab/window
 const STORAGE_KEY = 'coldconnect_generate_state_v1';
 
 export default function Generate() {
@@ -80,11 +104,16 @@ export default function Generate() {
   const [toastMessage, setToastMessage] = useState("");
   const [isSavingEmail, setIsSavingEmail] = useState(false);
   const [senderName, setSenderName] = useState<string>("");
+  const [selectedSubject, setSelectedSubject] = useState<string>("");
+  const [userEmail, setUserEmail] = useState<string>("");
 
-  // Hydrate saved progress on first load
+  // Hydrate saved progress on first load (sessionStorage keeps per-tab state)
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      // Clean legacy localStorage so new tabs start clean
+      localStorage.removeItem(STORAGE_KEY);
+
+      const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const saved = JSON.parse(raw);
       if (saved.role) setRole(saved.role);
@@ -97,6 +126,7 @@ export default function Generate() {
       if (typeof saved.comments === 'string') setComments(saved.comments);
       if (typeof saved.senderName === 'string') setSenderName(saved.senderName);
       if (typeof saved.editableEmailBody === 'string') setEditableEmailBody(saved.editableEmailBody);
+      if (typeof saved.selectedSubject === 'string') setSelectedSubject(saved.selectedSubject);
     } catch (err) {
       console.warn('[Generate] Failed to parse saved state:', err);
     }
@@ -116,12 +146,30 @@ export default function Generate() {
         comments,
         senderName,
         editableEmailBody,
+        selectedSubject,
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch (err) {
       console.warn('[Generate] Failed to save state:', err);
     }
-  }, [role, company, domain, activeDomain, location, tone, purpose, comments, senderName, editableEmailBody]);
+  }, [role, company, domain, activeDomain, location, tone, purpose, comments, senderName, editableEmailBody, selectedSubject]);
+
+  // When we get fresh subjects, pick the first as default
+  useEffect(() => {
+    const firstSubject = Array.isArray(result?.subjectSuggestions) ? result.subjectSuggestions[0] : '';
+    if (firstSubject) setSelectedSubject(firstSubject);
+  }, [result?.subjectSuggestions]);
+
+  // Fetch user email for Gmail authuser targeting
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const email = data.user?.email || '';
+        if (email) setUserEmail(email);
+      } catch {}
+    })();
+  }, []);
 
   // Prefill sender name from Supabase user metadata when available
   useEffect(() => {
@@ -203,8 +251,32 @@ export default function Generate() {
 
   const openGmail = (to: string, subject: string, body: string) => {
     logEvent('compose_click');
-    const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to || "")}&su=${encodeURIComponent(subject || "Exciting Opportunity")}&body=${encodeURIComponent(body || "")}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    openGmailCompose({ to, subject, body, authUser: userEmail });
+  };
+
+  const copyToClipboard = async (text: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToastNotification('Copied to clipboard');
+      return;
+    } catch (err) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToastNotification('Copied to clipboard');
+        return;
+      } catch (err2) {
+        console.warn('Clipboard copy failed', err2);
+        showToastNotification('Unable to copy. Please copy manually.');
+      }
+    }
   };
 
   const showToastNotification = (message: string) => { setToastMessage(message); setShowToast(true); setTimeout(() => setShowToast(false), 3000); };
@@ -415,16 +487,27 @@ export default function Generate() {
             <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Your Generated Email</h2>
             <div className="space-y-6">
               {Array.isArray(result.subjectSuggestions) && result.subjectSuggestions.length > 0 && (
-                <div className="bg-white p-4 rounded-lg border border-primary-200">
-                  <span className="text-sm font-semibold text-primary-700">Subject Suggestions:</span>
-                  <ul className="mt-3 space-y-2">
+                <div className="bg-white p-4 rounded-lg border border-primary-200 space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <span className="text-sm font-semibold text-primary-700">Subject Suggestions</span>
+                    <div className="flex items-center gap-2 text-sm">
+                      <label className="text-gray-700">Use this subject:</label>
+                      <select
+                        value={selectedSubject}
+                        onChange={(e) => setSelectedSubject(e.target.value)}
+                        className="border rounded px-3 py-2 text-sm"
+                      >
+                        {result.subjectSuggestions.map((subj: string, idx: number) => (
+                          <option key={idx} value={subj}>{subj}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <ul className="space-y-2">
                     {result.subjectSuggestions.map((subj: string, idx: number) => (
                       <li key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border">
                         <span className="text-gray-900 font-medium">{subj}</span>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => navigator.clipboard.writeText(subj)} className="text-primary-600 hover:text-primary-700 text-sm font-medium transition-colors">Copy</button>
-                          <button onClick={() => openGmail("", subj, editableEmailBody || "")} className="ml-2 inline-flex items-center px-3 py-1.5 rounded-md bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors">Compose in Gmail</button>
-                        </div>
+                        <button onClick={() => copyToClipboard(subj)} className="text-primary-600 hover:text-primary-700 text-sm font-medium transition-colors">Copy</button>
                       </li>
                     ))}
                   </ul>
@@ -505,7 +588,10 @@ export default function Generate() {
                         </div>
                         <div className="flex flex-col gap-2">
                           {contact.email && (
-                            <button onClick={() => openGmail(contact.email, result?.subjectSuggestions?.[0] || "Exciting Opportunity", editableEmailBody || "")} className="inline-flex items-center px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">📧 Email</button>
+                            <button
+                              onClick={() => openGmail(contact.email, selectedSubject || result?.subjectSuggestions?.[0] || "Exciting Opportunity", editableEmailBody || "")}
+                              className="inline-flex items-center px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+                            >📧 Compose</button>
                           )}
                           {contact.linkedin && (
                             <a href={contact.linkedin} target="_blank" rel="noopener noreferrer" className="inline-flex items-center px-4 py-2 rounded-md bg-blue-100 text-blue-700 text-sm font-medium hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">🔗 LinkedIn</a>
